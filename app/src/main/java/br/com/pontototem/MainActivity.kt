@@ -1,0 +1,106 @@
+package br.com.pontototem
+
+import android.os.Bundle
+import android.view.WindowManager
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.setContent
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import br.com.pontototem.data.Repo
+import br.com.pontototem.data.Settings
+import br.com.pontototem.kiosk.Kiosk
+import br.com.pontototem.ui.AdminPinScreen
+import br.com.pontototem.ui.AdminScreen
+import br.com.pontototem.ui.AppState
+import br.com.pontototem.ui.ErrorScreen
+import br.com.pontototem.ui.FaceScreen
+import br.com.pontototem.ui.HomeScreen
+import br.com.pontototem.ui.PasswordScreen
+import br.com.pontototem.ui.PontoTheme
+import br.com.pontototem.ui.ReceiptScreen
+import br.com.pontototem.ui.Screen
+import br.com.pontototem.ui.SuccessScreen
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+
+class MainActivity : ComponentActivity() {
+
+    private lateinit var settings: Settings
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        settings = Settings(applicationContext)
+        val repo = Repo(applicationContext, settings)
+
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        hideSystemBars()
+
+        setContent {
+            val state = remember { AppState(repo, settings) }
+
+            // Conexao, fila pendente e envio automatico a cada 5 segundos.
+            LaunchedEffect(Unit) {
+                while (true) {
+                    val online = withContext(Dispatchers.IO) { repo.isOnline() }
+                    if (online) {
+                        withContext(Dispatchers.IO) { repo.syncPending() }
+                    }
+                    state.online = online
+                    state.pending = withContext(Dispatchers.IO) { repo.pendingCount() }
+                    delay(5_000)
+                }
+            }
+
+            // O botao voltar nunca fecha o totem; apenas retorna ao inicio.
+            BackHandler(enabled = true) {
+                if (state.screen != Screen.HOME) state.goHome()
+            }
+
+            PontoTheme(mode = state.themeMode) {
+                when (state.screen) {
+                    Screen.HOME -> HomeScreen(state)
+                    Screen.PASSWORD -> PasswordScreen(state)
+                    Screen.FACE -> FaceScreen(state)
+                    Screen.SUCCESS -> SuccessScreen(state)
+                    Screen.RECEIPT -> ReceiptScreen(state)
+                    Screen.ERROR -> ErrorScreen(state)
+                    Screen.ADMIN_PIN -> AdminPinScreen(state)
+                    Screen.ADMIN -> AdminScreen(
+                        state = state,
+                        onKioskChanged = { on ->
+                            if (on) Kiosk.lock(this@MainActivity) else Kiosk.unlock(this@MainActivity)
+                        },
+                        onCloseApp = {
+                            Kiosk.unlock(this@MainActivity)
+                            finishAndRemoveTask()
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        hideSystemBars()
+        if (settings.kioskLock) Kiosk.lock(this)
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) hideSystemBars()
+    }
+
+    private fun hideSystemBars() {
+        val controller = WindowInsetsControllerCompat(window, window.decorView)
+        controller.systemBarsBehavior =
+            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        controller.hide(WindowInsetsCompat.Type.systemBars())
+    }
+}
