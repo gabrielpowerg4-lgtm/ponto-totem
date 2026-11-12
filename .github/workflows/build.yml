@@ -20,17 +20,21 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Build debug APK
         run: ./gradlew assembleDebug --stacktrace
-      - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk ponto-totem-${{ github.run_number }}.apk
+      - name: Rename APKs
+        run: |
+          ls -la app/build/outputs/apk/debug/
+          cp app/build/outputs/apk/debug/app-arm64-v8a-debug.apk ponto-totem-${{ github.run_number }}.apk
+          cp app/build/outputs/apk/debug/app-armeabi-v7a-debug.apk ponto-totem-${{ github.run_number }}-32bits.apk
+          ls -la *.apk
       - uses: actions/upload-artifact@v4
         with:
           name: ponto-totem-apk
-          path: ponto-totem-${{ github.run_number }}.apk
+          path: ponto-totem-*.apk
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "build-${{ github.run_number }}" "ponto-totem-${{ github.run_number }}.apk" \
+          gh release create "build-${{ github.run_number }}" ponto-totem-*.apk \
             --title "Validacao ${{ github.run_number }}" \
-            --notes "APK de validacao (modo demonstracao). Commit ${{ github.sha }}." \
+            --notes "APK de validacao (modo demonstracao). Use o arquivo sem sufixo; o -32bits e para tablets antigos. Commit ${{ github.sha }}." \
             --prerelease

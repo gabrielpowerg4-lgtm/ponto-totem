@@ -27,6 +27,16 @@ android {
         }
     }
 
+    // Um APK por arquitetura, para reduzir o tamanho do download.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a")
+            isUniversalApk = false
+        }
+    }
+
     buildTypes {
         debug {
             signingConfig = signingConfigs.getByName("debug")
