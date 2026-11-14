@@ -1,22 +1,24 @@
 # Ponto Totem
 
 Aplicativo Android (Kotlin + Jetpack Compose) de registro de ponto em tablet, em modo totem.
-Esta versão é um APK de validação em **modo demonstração**: não fala com servidor e o
-comprovante exibido não tem valor legal.
+Versão de validação: cadastro, autenticação, vivacidade e marcações funcionam no aparelho;
+o servidor REP-P (NSR, assinatura, comprovante por e-mail, Bubble) ainda não existe.
 
 ## Instalar
 
 Baixe o APK mais recente em **Releases** e instale no tablet (Android 10 ou superior).
 
-## Dados de demonstração
+## Primeiro uso
 
-| CPF | Senha | Nome |
-| --- | --- | --- |
-| 111.444.777-35 | 1234 | Ana Souza |
-| 529.982.247-25 | 4321 | Carlos Lima |
-| 123.456.789-09 | 0000 | Marina Alves |
+1. Na primeira abertura, o app pede a configuração inicial: empresa, obra, responsável,
+   identificador do terminal e as duas senhas (administrador e responsável da obra).
+2. Na tela inicial, toque e segure em "Terminal ..." para abrir a área administrativa.
+   A senha digitada define o perfil.
+3. Em "Funcionários da obra", cadastre cada pessoa (nome, CPF, e-mail, senha de ponto)
+   e capture a foto de referência.
 
-Área administrativa: toque e segure em "Terminal ..." na tela inicial. Senha: `1234`.
+Sem endereço de servidor configurado, as marcações ficam guardadas no aparelho,
+como pendentes, até o servidor existir.
 
 ## Modo totem completo (opcional)
 

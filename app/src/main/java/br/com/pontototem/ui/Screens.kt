@@ -112,7 +112,7 @@ fun HomeScreen(state: AppState) {
             )
             VSpace(10)
             Text(
-                text = "Demonstração: CPF 111.444.777-35, senha 1234",
+                text = "Primeiro acesso? Procure o responsável da obra.",
                 style = MaterialTheme.typography.bodySmall,
                 color = colors.onSurfaceVariant,
                 textAlign = TextAlign.Center
@@ -128,6 +128,8 @@ fun HomeScreen(state: AppState) {
 @Composable
 fun PasswordScreen(state: AppState) {
     var pin by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     // Encerra a sessao apos 30 segundos sem digitacao.
     LaunchedEffect(pin) {
@@ -186,19 +188,30 @@ fun PasswordScreen(state: AppState) {
                     modifier = Modifier.weight(1f)
                 )
                 PrimaryButton(
-                    text = "Entrar",
-                    enabled = pin.length >= 4,
+                    text = if (busy) "Conferindo" else "Entrar",
+                    enabled = pin.length >= 4 && !busy,
                     onClick = {
-                        val found = state.repo.authenticate(state.cpf, pin)
-                        if (found == null) {
-                            // Mensagem unica: nao revela se o CPF existe.
-                            state.showError(
-                                "Não foi possível entrar",
-                                "CPF ou senha incorretos. Tente de novo ou procure o RH."
-                            )
-                        } else {
-                            state.employee = found
-                            state.screen = Screen.FACE
+                        busy = true
+                        val cpf = state.cpf
+                        val typed = pin
+                        scope.launch {
+                            val found = withContext(Dispatchers.IO) {
+                                val e = state.repo.authenticate(cpf, typed)
+                                if (e == null) {
+                                    state.repo.audit("Sistema", "Falha de autenticação", Cpf.masked(cpf))
+                                }
+                                e
+                            }
+                            if (found == null) {
+                                // Mensagem unica: nao revela se o CPF existe.
+                                state.showError(
+                                    "Não foi possível entrar",
+                                    "CPF ou senha incorretos. Tente de novo ou procure o responsável da obra."
+                                )
+                            } else {
+                                state.employee = found
+                                state.screen = Screen.FACE
+                            }
                         }
                     },
                     modifier = Modifier.weight(1f)
@@ -218,15 +231,46 @@ private const val PHASE_EYES_CLOSED = 2
 private const val PHASE_DONE = 3
 private const val MAX_ATTEMPTS = 3
 
+/** Fluxo de marcacao: verifica a vivacidade e registra o ponto, validado ou sinalizado. */
 @Composable
 fun FaceScreen(state: AppState) {
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val employee = state.employee
     if (employee == null) {
         LaunchedEffect(Unit) { state.goHome() }
         return
     }
+    FaceCheck(
+        greeting = "Olá, ${employee.name.substringBefore(' ')}",
+        unavailableDetail = "Sua marcação será registrada e sinalizada para o RH.",
+        doneDetail = "Registrando sua marcação.",
+        onCancel = { state.goHome() },
+        onResult = { faceStatus ->
+            scope.launch {
+                val punch = withContext(Dispatchers.IO) {
+                    state.repo.registerPunch(employee, state.repo.isOnline(), faceStatus)
+                }
+                state.punch = punch
+                state.pending = state.pending + 1
+                state.screen = Screen.SUCCESS
+            }
+        }
+    )
+}
+
+/**
+ * Verificacao de vivacidade pela camera frontal. Chama `onResult` uma unica vez
+ * com o resultado: validado, sem validacao (3 tentativas) ou camera indisponivel.
+ */
+@Composable
+fun FaceCheck(
+    greeting: String,
+    unavailableDetail: String,
+    doneDetail: String,
+    onCancel: () -> Unit,
+    onResult: (String) -> Unit
+) {
+    val context = LocalContext.current
 
     var granted by remember {
         mutableStateOf(
@@ -251,14 +295,7 @@ fun FaceScreen(state: AppState) {
     val finish: (String) -> Unit = { faceStatus ->
         if (!finished) {
             finished = true
-            scope.launch {
-                val punch = withContext(Dispatchers.IO) {
-                    state.repo.registerPunch(employee, state.repo.isOnline(), faceStatus)
-                }
-                state.punch = punch
-                state.pending = state.pending + 1
-                state.screen = Screen.SUCCESS
-            }
+            onResult(faceStatus)
         }
     }
 
@@ -268,7 +305,7 @@ fun FaceScreen(state: AppState) {
 
     val unavailable = cameraFailed || (answered && !granted)
 
-    // O sistema nunca impede a marcacao: sem camera, registra com sinalizacao.
+    // O sistema nunca impede a marcacao: sem camera, segue com sinalizacao.
     LaunchedEffect(unavailable) {
         if (unavailable) {
             delay(2_500)
@@ -276,7 +313,7 @@ fun FaceScreen(state: AppState) {
         }
     }
 
-    // Cada tentativa dura 12 segundos; apos a terceira, registra sem validacao.
+    // Cada tentativa dura 12 segundos; apos a terceira, segue sem validacao.
     LaunchedEffect(attempt, granted, unavailable) {
         if (granted && !unavailable) {
             delay(12_000)
@@ -326,59 +363,43 @@ fun FaceScreen(state: AppState) {
     val colors = MaterialTheme.colorScheme
     val status = LocalStatusColors.current
 
-    Row(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(colors.background)
-            .padding(24.dp),
-        horizontalArrangement = Arrangement.spacedBy(24.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .weight(1.2f)
-                .fillMaxHeight()
-                .clip(MaterialTheme.shapes.large)
-                .background(colors.surfaceVariant),
-            contentAlignment = Alignment.Center
-        ) {
-            if (granted && !unavailable) {
-                FaceCamera(
-                    modifier = Modifier.fillMaxSize(),
-                    onSample = onSample,
-                    onCameraError = { cameraFailed = true }
-                )
-                val guide = when (phase) {
-                    PHASE_SEARCHING -> colors.outline
-                    PHASE_DONE -> status.success
-                    else -> colors.primary
-                }
-                Canvas(Modifier.fillMaxSize()) {
-                    val h = size.height * 0.74f
-                    val w = h * 0.74f
-                    drawOval(
-                        color = guide,
-                        topLeft = Offset((size.width - w) / 2f, (size.height - h) / 2f),
-                        size = Size(w, h),
-                        style = Stroke(width = 5.dp.toPx())
+    AdaptivePanes(
+        firstWeight = 0.6f,
+        secondWeight = 0.4f,
+        secondCard = false,
+        first = {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .clip(MaterialTheme.shapes.large)
+                    .background(colors.surfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                if (granted && !unavailable) {
+                    FaceCamera(
+                        modifier = Modifier.fillMaxSize(),
+                        onSample = onSample,
+                        onCameraError = { cameraFailed = true }
+                    )
+                    val guide = when (phase) {
+                        PHASE_SEARCHING -> colors.outline
+                        PHASE_DONE -> status.success
+                        else -> colors.primary
+                    }
+                    FaceGuide(color = guide)
+                } else {
+                    Text(
+                        text = if (unavailable) "Câmera indisponível" else "Aguardando permissão da câmera",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = colors.onSurfaceVariant
                     )
                 }
-            } else {
-                Text(
-                    text = if (unavailable) "Câmera indisponível" else "Aguardando permissão da câmera",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = colors.onSurfaceVariant
-                )
             }
-        }
-
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxHeight()
-                .padding(horizontal = 12.dp, vertical = 8.dp)
-        ) {
+        },
+        second = {
             Text(
-                text = "Olá, ${employee.name.substringBefore(' ')}",
+                text = greeting,
                 style = MaterialTheme.typography.titleLarge,
                 color = colors.onSurfaceVariant
             )
@@ -390,9 +411,9 @@ fun FaceScreen(state: AppState) {
                 else -> "Agora pisque os olhos"
             }
             val detail = when {
-                unavailable -> "Sua marcação será registrada e sinalizada para o RH."
+                unavailable -> unavailableDetail
                 phase == PHASE_SEARCHING -> "Olhe para a câmera, de frente, com o rosto descoberto."
-                phase == PHASE_DONE -> "Registrando sua marcação."
+                phase == PHASE_DONE -> doneDetail
                 else -> "Feche e abra os olhos uma vez, devagar."
             }
             Text(
@@ -406,7 +427,7 @@ fun FaceScreen(state: AppState) {
                 style = MaterialTheme.typography.bodyLarge,
                 color = colors.onSurfaceVariant
             )
-            VSpace(20)
+            VSpace(16)
             if (!unavailable) {
                 Text(
                     text = "Tentativa $attempt de $MAX_ATTEMPTS",
@@ -417,10 +438,30 @@ fun FaceScreen(state: AppState) {
             Spacer(Modifier.weight(1f))
             SecondaryButton(
                 text = "Cancelar",
-                onClick = { if (!finished) state.goHome() },
+                onClick = { if (!finished) onCancel() },
                 modifier = Modifier.fillMaxWidth()
             )
         }
+    )
+}
+
+/** Moldura oval que indica onde posicionar o rosto. Acompanha o tamanho da area da camera. */
+@Composable
+fun FaceGuide(color: androidx.compose.ui.graphics.Color) {
+    Canvas(Modifier.fillMaxSize()) {
+        val limit = if (size.height * 0.74f * 0.74f > size.width * 0.8f) {
+            size.width * 0.8f / 0.74f
+        } else {
+            size.height * 0.74f
+        }
+        val h = limit
+        val w = h * 0.74f
+        drawOval(
+            color = color,
+            topLeft = Offset((size.width - w) / 2f, (size.height - h) / 2f),
+            size = Size(w, h),
+            style = Stroke(width = 5.dp.toPx())
+        )
     }
 }
 
@@ -581,12 +622,13 @@ fun ReceiptScreen(state: AppState) {
             )
             VSpace(12)
             Banner(
-                text = "Demonstração, sem valor legal. O comprovante oficial, com NSR e " +
-                    "assinatura digital, será emitido pelo serviço REP-P.",
+                text = "Registro local da marcação. O comprovante oficial, com NSR e assinatura " +
+                    "digital, é emitido pelo servidor e enviado ao e-mail cadastrado.",
                 tone = status.warning
             )
             VSpace(16)
-            ReceiptRow("Empresa", state.companyName)
+            ReceiptRow("Empresa", punch.company)
+            ReceiptRow("Obra ou local", punch.site)
             ReceiptRow("Trabalhador", punch.name)
             ReceiptRow("CPF", Cpf.masked(punch.cpf))
             ReceiptRow("Data e hora", Fmt.dateTime(punch.markedAt) + " (UTC" + Fmt.zone() + ")")

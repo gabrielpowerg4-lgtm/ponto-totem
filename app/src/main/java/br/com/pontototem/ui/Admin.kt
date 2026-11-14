@@ -1,23 +1,22 @@
 package br.com.pontototem.ui
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -32,10 +31,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import br.com.pontototem.data.AuditEntry
 import br.com.pontototem.data.Cpf
 import br.com.pontototem.data.Fmt
 import br.com.pontototem.data.Punch
+import br.com.pontototem.data.Role
+import br.com.pontototem.data.Secrets
 import br.com.pontototem.data.SyncEntry
 import br.com.pontototem.data.SyncStatus
 import br.com.pontototem.face.hasAnyCamera
@@ -44,15 +47,18 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 
 // ---------------------------------------------------------------------------
-// Senha da area administrativa
+// Senha da area administrativa: a senha digitada define o perfil
 // ---------------------------------------------------------------------------
 
 @Composable
 fun AdminPinScreen(state: AppState) {
     var pin by remember { mutableStateOf("") }
     var wrong by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(pin) {
         delay(20_000)
@@ -70,7 +76,7 @@ fun AdminPinScreen(state: AppState) {
             )
             VSpace(4)
             Text(
-                text = if (wrong) "Senha incorreta" else "Digite a senha do administrador",
+                text = if (wrong) "Senha incorreta" else "Digite sua senha de acesso",
                 style = MaterialTheme.typography.bodyLarge,
                 color = if (wrong) colors.error else colors.onSurfaceVariant
             )
@@ -102,7 +108,7 @@ fun AdminPinScreen(state: AppState) {
             VSpace(16)
             Row(
                 modifier = Modifier
-                    .widthIn(max = 420.dp)
+                    .widthIn(max = 460.dp)
                     .fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
@@ -112,14 +118,34 @@ fun AdminPinScreen(state: AppState) {
                     modifier = Modifier.weight(1f)
                 )
                 PrimaryButton(
-                    text = "Entrar",
-                    enabled = pin.length >= 4,
+                    text = if (busy) "Conferindo" else "Entrar",
+                    enabled = pin.length >= 4 && !busy,
                     onClick = {
-                        if (pin == state.settings.adminPin) {
-                            state.screen = Screen.ADMIN
-                        } else {
-                            wrong = true
-                            pin = ""
+                        busy = true
+                        val typed = pin
+                        scope.launch {
+                            val role = withContext(Dispatchers.IO) {
+                                val settings = state.settings
+                                val found = when {
+                                    Secrets.verify(typed, settings.adminPinHash) -> Role.ADMIN
+                                    Secrets.verify(typed, settings.managerPinHash) -> Role.MANAGER
+                                    else -> ""
+                                }
+                                if (found.isEmpty()) {
+                                    state.repo.audit("Sistema", "Acesso administrativo negado", "")
+                                } else {
+                                    state.repo.audit(Role.label(found), "Acesso administrativo", "")
+                                }
+                                found
+                            }
+                            busy = false
+                            if (role.isEmpty()) {
+                                wrong = true
+                                pin = ""
+                            } else {
+                                state.role = role
+                                state.screen = Screen.ADMIN
+                            }
                         }
                     },
                     modifier = Modifier.weight(1f)
@@ -131,6 +157,10 @@ fun AdminPinScreen(state: AppState) {
 
 // ---------------------------------------------------------------------------
 // Area administrativa
+//
+// Responsavel da obra: status, sincronizacao e funcionarios.
+// Administrador: tambem a configuracao do terminal, a operacao e a auditoria.
+// Nenhum perfil altera ou exclui marcacoes: essa funcao nao existe no aplicativo.
 // ---------------------------------------------------------------------------
 
 @Composable
@@ -138,17 +168,30 @@ fun AdminScreen(state: AppState, onKioskChanged: (Boolean) -> Unit, onCloseApp: 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val colors = MaterialTheme.colorScheme
+    val status = LocalStatusColors.current
     val settings = state.settings
+    val isAdmin = state.role == Role.ADMIN
 
     var refresh by remember { mutableIntStateOf(0) }
     var total by remember { mutableIntStateOf(0) }
+    var employeeCount by remember { mutableIntStateOf(0) }
     var log by remember { mutableStateOf(emptyList<SyncEntry>()) }
     var punches by remember { mutableStateOf(emptyList<Punch>()) }
+    var audit by remember { mutableStateOf(emptyList<AuditEntry>()) }
+
     var company by remember { mutableStateOf(settings.companyName) }
+    var site by remember { mutableStateOf(settings.siteName) }
+    var responsible by remember { mutableStateOf(settings.responsibleName) }
     var terminal by remember { mutableStateOf(settings.terminalId) }
     var apiUrl by remember { mutableStateOf(settings.apiUrl) }
+    var apiToken by remember { mutableStateOf(settings.apiToken) }
+    var newAdminPin by remember { mutableStateOf("") }
+    var newManagerPin by remember { mutableStateOf("") }
+    var configMessage by remember { mutableStateOf("") }
+    var configError by remember { mutableStateOf("") }
     var simulateOffline by remember { mutableStateOf(settings.simulateOffline) }
     var kiosk by remember { mutableStateOf(settings.kioskLock) }
+    var syncing by remember { mutableStateOf(false) }
 
     val version = remember {
         try {
@@ -162,104 +205,297 @@ fun AdminScreen(state: AppState, onKioskChanged: (Boolean) -> Unit, onCloseApp: 
 
     LaunchedEffect(refresh) {
         val repo = state.repo
-        val loaded = withContext(Dispatchers.IO) {
-            Triple(repo.totalCount(), repo.syncLog(8), repo.recentPunches(8))
+        withContext(Dispatchers.IO) {
+            val t = repo.totalCount()
+            val ec = repo.employeeCount()
+            val l = repo.syncLog(8)
+            val p = repo.recentPunches(8)
+            val a = repo.auditLog(30)
+            val pending = repo.pendingCount()
+            val online = repo.isOnline()
+            withContext(Dispatchers.Main) {
+                total = t
+                employeeCount = ec
+                log = l
+                punches = p
+                audit = a
+                state.pending = pending
+                state.online = online
+            }
         }
-        total = loaded.first
-        log = loaded.second
-        punches = loaded.third
-        state.pending = withContext(Dispatchers.IO) { repo.pendingCount() }
-        state.online = withContext(Dispatchers.IO) { repo.isOnline() }
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(colors.background)
-            .imePadding(),
-        contentAlignment = Alignment.TopCenter
-    ) {
-        Column(
-            modifier = Modifier
-                .widthIn(max = 920.dp)
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(24.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+    val logoPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val ok = withContext(Dispatchers.IO) {
+                    try {
+                        val source = context.contentResolver.openInputStream(uri).use { input ->
+                            BitmapFactory.decodeStream(input)
+                        }
+                        if (source == null) {
+                            false
+                        } else {
+                            val largest = if (source.width > source.height) source.width else source.height
+                            val scaled = if (largest > 512) {
+                                val ratio = 512f / largest
+                                Bitmap.createScaledBitmap(
+                                    source,
+                                    (source.width * ratio).toInt(),
+                                    (source.height * ratio).toInt(),
+                                    true
+                                )
+                            } else {
+                                source
+                            }
+                            val out = ByteArrayOutputStream()
+                            scaled.compress(Bitmap.CompressFormat.PNG, 100, out)
+                            state.repo.saveLogo(out.toByteArray(), Role.label(Role.ADMIN))
+                            true
+                        }
+                    } catch (e: Exception) {
+                        false
+                    }
+                }
+                if (ok) {
+                    state.logoVersion += 1
+                    configError = ""
+                    configMessage = "Logotipo atualizado."
+                } else {
+                    configMessage = ""
+                    configError = "Não foi possível ler a imagem escolhida."
+                }
+                refresh += 1
+            }
+        }
+    }
+
+    FormPage {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
                 Text(
                     text = "Área administrativa",
                     style = MaterialTheme.typography.headlineMedium,
-                    color = colors.onBackground,
-                    modifier = Modifier.weight(1f)
+                    color = colors.onBackground
                 )
-                SecondaryButton(text = "Sair", onClick = { state.goHome() })
+                Text(
+                    text = "Perfil: ${Role.label(state.role)}",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = colors.onSurfaceVariant
+                )
             }
+            SecondaryButton(text = "Sair", onClick = { state.goHome() })
+        }
 
-            VSpace(20)
-            SectionTitle("Status")
-            Card {
-                InfoRow("Conexão", if (state.online) "On-line" else "Off-line")
-                InfoRow("Registros pendentes", state.pending.toString())
-                InfoRow("Registros no aparelho", total.toString())
-                InfoRow("Câmera", if (camera) "Disponível" else "Não encontrada")
-                InfoRow(
-                    "Modo totem",
-                    if (deviceOwner) "Ativo (Device Owner)" else "Parcial: app não é Device Owner"
-                )
-                InfoRow("Versão", version, last = true)
-            }
-            VSpace(12)
-            PrimaryButton(
-                text = "Sincronizar agora",
-                onClick = {
+        VSpace(20)
+        PrimaryButton(
+            text = "Funcionários da obra ($employeeCount)",
+            modifier = Modifier.fillMaxWidth(),
+            onClick = { state.screen = Screen.EMPLOYEES }
+        )
+
+        VSpace(24)
+        SectionTitle("Status")
+        Card {
+            InfoRow("Empresa", settings.companyName)
+            InfoRow("Obra ou local", settings.siteName)
+            InfoRow("Responsável", settings.responsibleName)
+            InfoRow("Terminal", settings.terminalId)
+            InfoRow("Conexão", if (state.online) "On-line" else "Off-line")
+            InfoRow(
+                "Servidor",
+                if (settings.apiUrl.isBlank()) "Não configurado: as marcações ficam guardadas no aparelho" else settings.apiUrl
+            )
+            InfoRow("Marcações a enviar", state.pending.toString())
+            InfoRow("Marcações no aparelho", total.toString())
+            InfoRow("Câmera", if (camera) "Disponível" else "Não encontrada")
+            InfoRow(
+                "Modo totem",
+                if (deviceOwner) "Ativo (Device Owner)" else "Parcial: app não é Device Owner"
+            )
+            InfoRow("Versão", version, last = true)
+        }
+        VSpace(12)
+        SecondaryButton(
+            text = if (syncing) "Enviando" else "Sincronizar agora",
+            modifier = Modifier.fillMaxWidth(),
+            onClick = {
+                if (!syncing) {
+                    syncing = true
+                    val actor = state.actor()
                     scope.launch {
-                        withContext(Dispatchers.IO) { state.repo.syncPending() }
+                        withContext(Dispatchers.IO) {
+                            state.repo.audit(actor, "Sincronização manual", "")
+                            state.repo.syncPending(true)
+                        }
+                        syncing = false
                         refresh += 1
                     }
-                },
-                modifier = Modifier.fillMaxWidth()
-            )
+                }
+            }
+        )
 
+        VSpace(24)
+        SectionTitle("Histórico de sincronizações")
+        Card {
+            if (log.isEmpty()) {
+                InfoRow("Nenhuma sincronização ainda", "", last = true)
+            }
+            for ((i, entry) in log.withIndex()) {
+                InfoRow(
+                    Fmt.dateTime(entry.at),
+                    (if (entry.ok) "${entry.count} enviado(s). " else "Não enviado. ") + entry.message,
+                    last = i == log.size - 1
+                )
+            }
+        }
+
+        VSpace(24)
+        SectionTitle("Últimas marcações (somente consulta)")
+        Card {
+            if (punches.isEmpty()) {
+                InfoRow("Nenhuma marcação ainda", "", last = true)
+            }
+            for ((i, p) in punches.withIndex()) {
+                val sync = if (p.syncStatus == SyncStatus.SENT) "Enviado" else "Pendente"
+                val origin = if (p.online) "on-line" else "off-line"
+                InfoRow(
+                    Fmt.dateTime(p.markedAt),
+                    "${Cpf.masked(p.cpf)} · $origin · $sync",
+                    last = i == punches.size - 1
+                )
+            }
+        }
+
+        if (isAdmin) {
             VSpace(28)
-            SectionTitle("Terminal")
-            OutlinedTextField(
-                value = company,
-                onValueChange = {
-                    company = it
-                    settings.companyName = it
-                    state.companyName = it
-                },
-                label = { Text("Empresa") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
+            SectionTitle("Configuração do terminal")
+            Field("Empresa", company, { company = it })
+            VSpace(12)
+            Field("Obra ou local de trabalho", site, { site = it })
+            VSpace(12)
+            Field("Responsável pelo dispositivo", responsible, { responsible = it })
+            VSpace(12)
+            Field("Identificador do terminal", terminal, { terminal = it })
+            VSpace(12)
+            Field(
+                "Endereço do servidor REP-P", apiUrl, { apiUrl = it.trim() },
+                keyboard = KeyboardType.Uri,
+                supporting = "Exemplo: https://ponto.suaempresa.com.br. Em branco, nada é enviado."
             )
             VSpace(12)
-            OutlinedTextField(
-                value = terminal,
-                onValueChange = {
-                    terminal = it
-                    settings.terminalId = it
-                    state.terminalId = it
-                },
-                label = { Text("Identificação do terminal") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
+            Field(
+                "Chave de acesso do terminal", apiToken, { apiToken = it.trim() },
+                secret = true,
+                supporting = "Fornecida pelo servidor para este terminal."
             )
             VSpace(12)
-            OutlinedTextField(
-                value = apiUrl,
-                onValueChange = {
-                    apiUrl = it
-                    settings.apiUrl = it
-                },
-                label = { Text("URL do serviço REP-P") },
-                supportingText = { Text("Ainda não utilizada: esta versão roda em modo demonstração.") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
+            Field(
+                "Nova senha do administrador (opcional)", newAdminPin,
+                { newAdminPin = it.filter { c -> c.isDigit() }.take(8) },
+                keyboard = KeyboardType.NumberPassword, secret = true
+            )
+            VSpace(12)
+            Field(
+                "Nova senha do responsável da obra (opcional)", newManagerPin,
+                { newManagerPin = it.filter { c -> c.isDigit() }.take(8) },
+                keyboard = KeyboardType.NumberPassword, secret = true
+            )
+            VSpace(12)
+            if (configError.isNotEmpty()) {
+                Banner(text = configError, tone = colors.error)
+                VSpace(12)
+            }
+            if (configMessage.isNotEmpty()) {
+                Banner(text = configMessage, tone = status.success)
+                VSpace(12)
+            }
+            PrimaryButton(
+                text = "Salvar configuração",
+                modifier = Modifier.fillMaxWidth(),
+                onClick = {
+                    configMessage = ""
+                    configError = when {
+                        company.isBlank() -> "Informe a empresa."
+                        site.isBlank() -> "Informe a obra ou o local de trabalho."
+                        terminal.isBlank() -> "Informe o identificador do terminal."
+                        apiUrl.isNotEmpty() && !apiUrl.startsWith("https://") ->
+                            "O endereço do servidor deve começar com https://."
+                        newAdminPin.isNotEmpty() && !isPin(newAdminPin) ->
+                            "A senha do administrador deve ter de 4 a 8 números."
+                        newManagerPin.isNotEmpty() && !isPin(newManagerPin) ->
+                            "A senha do responsável deve ter de 4 a 8 números."
+                        else -> ""
+                    }
+                    if (configError.isEmpty()) {
+                        val adminPin = newAdminPin
+                        val managerPin = newManagerPin
+                        scope.launch {
+                            withContext(Dispatchers.IO) {
+                                settings.companyName = company.trim()
+                                settings.siteName = site.trim()
+                                settings.responsibleName = responsible.trim()
+                                settings.terminalId = terminal.trim()
+                                settings.apiUrl = apiUrl
+                                settings.apiToken = apiToken
+                                if (adminPin.isNotEmpty()) settings.adminPinHash = Secrets.hash(adminPin)
+                                if (managerPin.isNotEmpty()) settings.managerPinHash = Secrets.hash(managerPin)
+                                state.repo.audit(
+                                    Role.label(Role.ADMIN), "Configuração do terminal alterada",
+                                    "${company.trim()} · ${site.trim()} · ${terminal.trim()}" +
+                                        (if (adminPin.isNotEmpty() || managerPin.isNotEmpty()) " · senha redefinida" else "")
+                                )
+                            }
+                            state.companyName = settings.companyName
+                            state.siteName = settings.siteName
+                            state.terminalId = settings.terminalId
+                            newAdminPin = ""
+                            newManagerPin = ""
+                            configMessage = "Configuração salva."
+                            refresh += 1
+                        }
+                    }
+                }
             )
 
-            VSpace(20)
+            VSpace(24)
+            SectionTitle("Logotipo da empresa")
+            Text(
+                text = "Aparece na tela inicial. Para escolher a imagem, desligue antes a trava " +
+                    "do aparelho, logo abaixo.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.onSurfaceVariant
+            )
+            VSpace(10)
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                PrimaryButton(
+                    text = "Escolher imagem",
+                    onClick = {
+                        try {
+                            logoPicker.launch("image/*")
+                        } catch (e: Exception) {
+                            configMessage = ""
+                            configError = "Não foi possível abrir a galeria neste aparelho."
+                        }
+                    },
+                    modifier = Modifier.weight(1f)
+                )
+                SecondaryButton(
+                    text = "Remover logotipo",
+                    onClick = {
+                        scope.launch {
+                            withContext(Dispatchers.IO) { state.repo.removeLogo(Role.label(Role.ADMIN)) }
+                            state.logoVersion += 1
+                            refresh += 1
+                        }
+                    },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            VSpace(24)
             SectionTitle("Operação")
             Card {
                 ToggleRow(
@@ -269,7 +505,15 @@ fun AdminScreen(state: AppState, onKioskChanged: (Boolean) -> Unit, onCloseApp: 
                     onChange = {
                         simulateOffline = it
                         settings.simulateOffline = it
-                        refresh += 1
+                        scope.launch {
+                            withContext(Dispatchers.IO) {
+                                state.repo.audit(
+                                    Role.label(Role.ADMIN), "Simulação de falta de internet",
+                                    if (it) "ligada" else "desligada"
+                                )
+                            }
+                            refresh += 1
+                        }
                     }
                 )
                 HorizontalDivider(color = colors.outlineVariant)
@@ -281,6 +525,15 @@ fun AdminScreen(state: AppState, onKioskChanged: (Boolean) -> Unit, onCloseApp: 
                         kiosk = it
                         settings.kioskLock = it
                         onKioskChanged(it)
+                        scope.launch {
+                            withContext(Dispatchers.IO) {
+                                state.repo.audit(
+                                    Role.label(Role.ADMIN), "Trava do aparelho",
+                                    if (it) "ligada" else "desligada"
+                                )
+                            }
+                            refresh += 1
+                        }
                     }
                 )
             }
@@ -304,46 +557,29 @@ fun AdminScreen(state: AppState, onKioskChanged: (Boolean) -> Unit, onCloseApp: 
                 }
             }
 
-            VSpace(28)
-            SectionTitle("Histórico de sincronizações")
+            VSpace(24)
+            SectionTitle("Auditoria (últimos 30 eventos)")
             Card {
-                if (log.isEmpty()) {
-                    InfoRow("Nenhuma sincronização ainda", "", last = true)
+                if (audit.isEmpty()) {
+                    InfoRow("Nenhum evento ainda", "", last = true)
                 }
-                for ((i, entry) in log.withIndex()) {
+                for ((i, a) in audit.withIndex()) {
                     InfoRow(
-                        Fmt.dateTime(entry.at),
-                        (if (entry.ok) "${entry.count} enviado(s). " else "Falha. ") + entry.message,
-                        last = i == log.size - 1
+                        Fmt.dateTime(a.at),
+                        a.actor + " · " + a.action + (if (a.detail.isEmpty()) "" else " · " + a.detail),
+                        last = i == audit.size - 1
                     )
                 }
             }
 
-            VSpace(28)
-            SectionTitle("Últimas marcações")
-            Card {
-                if (punches.isEmpty()) {
-                    InfoRow("Nenhuma marcação ainda", "", last = true)
-                }
-                for ((i, p) in punches.withIndex()) {
-                    val sync = if (p.syncStatus == SyncStatus.SENT) "Enviado" else "Pendente"
-                    val origin = if (p.online) "on-line" else "off-line"
-                    InfoRow(
-                        Fmt.dateTime(p.markedAt),
-                        "${Cpf.masked(p.cpf)} · $origin · $sync",
-                        last = i == punches.size - 1
-                    )
-                }
-            }
-
-            VSpace(28)
+            VSpace(24)
             SecondaryButton(
                 text = "Fechar aplicativo",
                 onClick = onCloseApp,
                 modifier = Modifier.fillMaxWidth()
             )
-            VSpace(24)
         }
+        VSpace(24)
     }
 }
 

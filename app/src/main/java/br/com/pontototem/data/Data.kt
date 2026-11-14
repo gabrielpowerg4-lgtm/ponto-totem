@@ -7,18 +7,34 @@ import android.database.sqlite.SQLiteOpenHelper
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.SystemClock
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 import java.security.MessageDigest
+import java.security.SecureRandom
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 import java.util.UUID
+import javax.crypto.SecretKeyFactory
+import javax.crypto.spec.PBEKeySpec
 
 // ---------------------------------------------------------------------------
 // Modelos
 // ---------------------------------------------------------------------------
 
-data class Employee(val cpf: String, val name: String, val pin: String)
+data class Employee(
+    val id: String,
+    val cpf: String,
+    val name: String,
+    val email: String,
+    val active: Boolean,
+    val hasFace: Boolean,
+    val faceAt: Long?
+)
 
 data class Punch(
     val id: String,
@@ -26,6 +42,8 @@ data class Punch(
     val name: String,
     val markedAt: Long,
     val terminal: String,
+    val company: String,
+    val site: String,
     val online: Boolean,
     val faceStatus: String,
     val prevHash: String,
@@ -35,6 +53,8 @@ data class Punch(
 )
 
 data class SyncEntry(val at: Long, val count: Int, val ok: Boolean, val message: String)
+
+data class AuditEntry(val at: Long, val actor: String, val action: String, val detail: String)
 
 object FaceStatus {
     const val LIVENESS_OK = "VIVACIDADE_OK"
@@ -51,6 +71,13 @@ object FaceStatus {
 object SyncStatus {
     const val PENDING = "PENDENTE"
     const val SENT = "ENVIADO"
+}
+
+object Role {
+    const val ADMIN = "ADMIN"
+    const val MANAGER = "RESPONSAVEL"
+
+    fun label(role: String): String = if (role == ADMIN) "Administrador" else "Responsável da obra"
 }
 
 // ---------------------------------------------------------------------------
@@ -92,6 +119,50 @@ object Cpf {
 }
 
 // ---------------------------------------------------------------------------
+// Senhas: so o hash fica guardado (PBKDF2 com sal por senha)
+// ---------------------------------------------------------------------------
+
+object Secrets {
+    private const val ITERATIONS = 120_000
+
+    private fun hex(bytes: ByteArray): String {
+        val sb = StringBuilder()
+        for (b in bytes) sb.append(String.format("%02x", b))
+        return sb.toString()
+    }
+
+    private fun unhex(text: String): ByteArray {
+        val out = ByteArray(text.length / 2)
+        for (i in out.indices) out[i] = text.substring(i * 2, i * 2 + 2).toInt(16).toByte()
+        return out
+    }
+
+    private fun derive(pin: String, salt: ByteArray): ByteArray {
+        val spec = PBEKeySpec(pin.toCharArray(), salt, ITERATIONS, 256)
+        return SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded
+    }
+
+    fun hash(pin: String): String {
+        val salt = ByteArray(16)
+        SecureRandom().nextBytes(salt)
+        return hex(salt) + ":" + hex(derive(pin, salt))
+    }
+
+    fun verify(pin: String, stored: String): Boolean {
+        val parts = stored.split(":")
+        if (parts.size != 2) return false
+        return try {
+            MessageDigest.isEqual(derive(pin, unhex(parts[0])), unhex(parts[1]))
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    fun sha256(text: String): String =
+        hex(MessageDigest.getInstance("SHA-256").digest(text.toByteArray(Charsets.UTF_8)))
+}
+
+// ---------------------------------------------------------------------------
 // Relogio: hora ancorada no relogio monotonico do aparelho
 // ---------------------------------------------------------------------------
 
@@ -99,7 +170,7 @@ object TrustedClock {
     private var anchorWall: Long = System.currentTimeMillis()
     private var anchorElapsed: Long = SystemClock.elapsedRealtime()
 
-    /** Na versao integrada, serverTimeMillis vem do servico REP-P a cada sincronizacao. */
+    /** serverTimeMillis vem do servico REP-P a cada sincronizacao bem-sucedida. */
     fun anchor(serverTimeMillis: Long) {
         anchorWall = serverTimeMillis
         anchorElapsed = SystemClock.elapsedRealtime()
@@ -119,6 +190,7 @@ object Fmt {
     fun date(ms: Long): String = fmt("EEEE, d 'de' MMMM 'de' yyyy").format(Date(ms))
     fun dateTime(ms: Long): String = fmt("dd/MM/yyyy HH:mm:ss").format(Date(ms))
     fun zone(): String = fmt("XXX").format(Date())
+    fun iso(ms: Long): String = fmt("yyyy-MM-dd'T'HH:mm:ss.SSSXXX").format(Date(ms))
 }
 
 // ---------------------------------------------------------------------------
@@ -128,27 +200,54 @@ object Fmt {
 class Settings(context: Context) {
     private val prefs = context.getSharedPreferences("terminal", Context.MODE_PRIVATE)
 
+    private fun str(key: String, default: String = ""): String = prefs.getString(key, default) ?: default
+    private fun put(key: String, value: String) = prefs.edit().putString(key, value).apply()
+
+    var setupDone: Boolean
+        get() = prefs.getBoolean("setup_done", false)
+        set(v) = prefs.edit().putBoolean("setup_done", v).apply()
+
     var companyName: String
-        get() = prefs.getString("company", "Empresa Demonstração") ?: "Empresa Demonstração"
-        set(v) = prefs.edit().putString("company", v).apply()
+        get() = str("company")
+        set(v) = put("company", v)
+
+    var siteName: String
+        get() = str("site")
+        set(v) = put("site", v)
+
+    var responsibleName: String
+        get() = str("responsible")
+        set(v) = put("responsible", v)
 
     var terminalId: String
         get() {
             val current = prefs.getString("terminal_id", null)
             if (current != null) return current
             val created = "TOTEM-" + UUID.randomUUID().toString().take(4).uppercase(Locale.ROOT)
-            prefs.edit().putString("terminal_id", created).apply()
+            put("terminal_id", created)
             return created
         }
-        set(v) = prefs.edit().putString("terminal_id", v).apply()
+        set(v) = put("terminal_id", v)
 
     var apiUrl: String
-        get() = prefs.getString("api_url", "") ?: ""
-        set(v) = prefs.edit().putString("api_url", v).apply()
+        get() = str("api_url")
+        set(v) = put("api_url", v)
+
+    var apiToken: String
+        get() = str("api_token")
+        set(v) = put("api_token", v)
+
+    var adminPinHash: String
+        get() = str("admin_pin_hash")
+        set(v) = put("admin_pin_hash", v)
+
+    var managerPinHash: String
+        get() = str("manager_pin_hash")
+        set(v) = put("manager_pin_hash", v)
 
     var themeMode: String
-        get() = prefs.getString("theme", "SYSTEM") ?: "SYSTEM"
-        set(v) = prefs.edit().putString("theme", v).apply()
+        get() = str("theme", "SYSTEM")
+        set(v) = put("theme", v)
 
     var simulateOffline: Boolean
         get() = prefs.getBoolean("simulate_offline", false)
@@ -157,17 +256,14 @@ class Settings(context: Context) {
     var kioskLock: Boolean
         get() = prefs.getBoolean("kiosk_lock", true)
         set(v) = prefs.edit().putBoolean("kiosk_lock", v).apply()
-
-    var adminPin: String
-        get() = prefs.getString("admin_pin", "1234") ?: "1234"
-        set(v) = prefs.edit().putString("admin_pin", v).apply()
 }
 
 // ---------------------------------------------------------------------------
 // Banco local
 // ---------------------------------------------------------------------------
 
-private class Db(context: Context) : SQLiteOpenHelper(context, "ponto.db", null, 1) {
+private class Db(context: Context) : SQLiteOpenHelper(context, "ponto.db", null, 2) {
+
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             "CREATE TABLE punches (" +
@@ -182,7 +278,9 @@ private class Db(context: Context) : SQLiteOpenHelper(context, "ponto.db", null,
                 "prev_hash TEXT NOT NULL," +
                 "hash TEXT NOT NULL," +
                 "sync_status TEXT NOT NULL," +
-                "synced_at INTEGER)"
+                "synced_at INTEGER," +
+                "company TEXT NOT NULL DEFAULT ''," +
+                "site TEXT NOT NULL DEFAULT '')"
         )
         db.execSQL(
             "CREATE TABLE sync_log (" +
@@ -192,30 +290,195 @@ private class Db(context: Context) : SQLiteOpenHelper(context, "ponto.db", null,
                 "ok INTEGER NOT NULL," +
                 "message TEXT NOT NULL)"
         )
+        createV2(db)
+    }
+
+    private fun createV2(db: SQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS employees (" +
+                "id TEXT PRIMARY KEY," +
+                "cpf TEXT NOT NULL UNIQUE," +
+                "name TEXT NOT NULL," +
+                "email TEXT NOT NULL," +
+                "pin_hash TEXT NOT NULL," +
+                "active INTEGER NOT NULL," +
+                "face_at INTEGER," +
+                "created_at INTEGER NOT NULL," +
+                "updated_at INTEGER NOT NULL)"
+        )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS audit (" +
+                "seq INTEGER PRIMARY KEY AUTOINCREMENT," +
+                "at INTEGER NOT NULL," +
+                "actor TEXT NOT NULL," +
+                "action TEXT NOT NULL," +
+                "detail TEXT NOT NULL)"
+        )
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // Versao unica por enquanto.
+        if (oldVersion < 2) {
+            db.execSQL("ALTER TABLE punches ADD COLUMN company TEXT NOT NULL DEFAULT ''")
+            db.execSQL("ALTER TABLE punches ADD COLUMN site TEXT NOT NULL DEFAULT ''")
+            createV2(db)
+        }
     }
 }
 
 // ---------------------------------------------------------------------------
-// Repositorio (modo demonstracao)
+// Repositorio
 // ---------------------------------------------------------------------------
 
 class Repo(private val context: Context, private val settings: Settings) {
     private val db = Db(context.applicationContext)
+    private val faceDir = File(context.filesDir, "faces")
+    private val logoFile = File(context.filesDir, "logo.png")
 
-    // Funcionarios ficticios para validacao. Na versao integrada, o cadastro vem
-    // do servico REP-P e a senha nunca fica em texto claro no aparelho.
-    private val demoEmployees = listOf(
-        Employee("11144477735", "Ana Souza", "1234"),
-        Employee("52998224725", "Carlos Lima", "4321"),
-        Employee("12345678909", "Marina Alves", "0000")
-    )
+    // ---- Funcionarios -----------------------------------------------------
 
-    fun authenticate(cpf: String, pin: String): Employee? =
-        demoEmployees.firstOrNull { it.cpf == cpf && it.pin == pin }
+    private val employeeColumns = "id, cpf, name, email, active, face_at"
+
+    private fun readEmployee(c: android.database.Cursor): Employee {
+        val faceAt = if (c.isNull(5)) null else c.getLong(5)
+        return Employee(
+            id = c.getString(0),
+            cpf = c.getString(1),
+            name = c.getString(2),
+            email = c.getString(3),
+            active = c.getInt(4) == 1,
+            hasFace = faceAt != null,
+            faceAt = faceAt
+        )
+    }
+
+    fun employees(): List<Employee> {
+        val out = ArrayList<Employee>()
+        db.readableDatabase.rawQuery(
+            "SELECT $employeeColumns FROM employees ORDER BY name COLLATE NOCASE", null
+        ).use { c ->
+            while (c.moveToNext()) out.add(readEmployee(c))
+        }
+        return out
+    }
+
+    fun employee(id: String): Employee? {
+        db.readableDatabase.rawQuery(
+            "SELECT $employeeColumns FROM employees WHERE id = ?", arrayOf(id)
+        ).use { c ->
+            return if (c.moveToFirst()) readEmployee(c) else null
+        }
+    }
+
+    /** Confere CPF e senha. Retorna null em qualquer falha, sem dizer qual. */
+    fun authenticate(cpf: String, pin: String): Employee? {
+        var employee: Employee? = null
+        var stored = ""
+        db.readableDatabase.rawQuery(
+            "SELECT $employeeColumns, pin_hash FROM employees WHERE cpf = ?", arrayOf(cpf)
+        ).use { c ->
+            if (c.moveToFirst()) {
+                employee = readEmployee(c)
+                stored = c.getString(6)
+            }
+        }
+        val found = employee
+        if (found == null) {
+            // Gasta o mesmo tempo de uma conferencia real.
+            Secrets.verify(pin, "00:00")
+            return null
+        }
+        if (!Secrets.verify(pin, stored)) return null
+        return if (found.active) found else null
+    }
+
+    /**
+     * Cria ou atualiza um funcionario. `newPin` vazio mantem a senha atual.
+     * Retorna o id gravado, ou lanca IllegalArgumentException com a mensagem a exibir.
+     */
+    @Synchronized
+    fun saveEmployee(
+        id: String?,
+        cpf: String,
+        name: String,
+        email: String,
+        active: Boolean,
+        newPin: String,
+        actor: String
+    ): String {
+        val now = TrustedClock.now()
+        db.readableDatabase.rawQuery(
+            "SELECT id FROM employees WHERE cpf = ?", arrayOf(cpf)
+        ).use { c ->
+            if (c.moveToFirst() && c.getString(0) != id) {
+                throw IllegalArgumentException("Já existe um funcionário com este CPF.")
+            }
+        }
+        val values = ContentValues().apply {
+            put("cpf", cpf)
+            put("name", name)
+            put("email", email)
+            put("active", if (active) 1 else 0)
+            put("updated_at", now)
+        }
+        if (newPin.isNotEmpty()) values.put("pin_hash", Secrets.hash(newPin))
+        if (id == null) {
+            if (newPin.isEmpty()) throw IllegalArgumentException("Defina uma senha para o funcionário.")
+            val newId = UUID.randomUUID().toString()
+            values.put("id", newId)
+            values.put("created_at", now)
+            db.writableDatabase.insertOrThrow("employees", null, values)
+            audit(actor, "Funcionário cadastrado", Cpf.masked(cpf))
+            return newId
+        }
+        db.writableDatabase.update("employees", values, "id = ?", arrayOf(id))
+        audit(
+            actor,
+            "Funcionário atualizado",
+            Cpf.masked(cpf) + (if (newPin.isNotEmpty()) " · senha redefinida" else "") +
+                (if (!active) " · inativo" else "")
+        )
+        return id
+    }
+
+    /** Guarda a foto de referencia cifrada com chave do Android Keystore. */
+    @Synchronized
+    fun saveFace(employeeId: String, jpeg: ByteArray, actor: String) {
+        faceDir.mkdirs()
+        File(faceDir, "$employeeId.bin").writeBytes(FaceVault.encrypt(jpeg))
+        val values = ContentValues().apply {
+            put("face_at", TrustedClock.now())
+            put("updated_at", TrustedClock.now())
+        }
+        db.writableDatabase.update("employees", values, "id = ?", arrayOf(employeeId))
+        val cpf = employee(employeeId)?.cpf ?: ""
+        audit(actor, "Foto de referência capturada", Cpf.masked(cpf))
+    }
+
+    fun loadFace(employeeId: String): ByteArray? {
+        val file = File(faceDir, "$employeeId.bin")
+        if (!file.exists()) return null
+        return try {
+            FaceVault.decrypt(file.readBytes())
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    // ---- Logotipo ---------------------------------------------------------
+
+    fun logoPath(): String? = if (logoFile.exists()) logoFile.absolutePath else null
+
+    fun saveLogo(png: ByteArray, actor: String) {
+        logoFile.writeBytes(png)
+        audit(actor, "Logotipo alterado", "")
+    }
+
+    fun removeLogo(actor: String) {
+        if (logoFile.exists()) logoFile.delete()
+        audit(actor, "Logotipo removido", "")
+    }
+
+    // ---- Conexao ----------------------------------------------------------
 
     fun isOnline(): Boolean {
         if (settings.simulateOffline) return false
@@ -226,19 +489,25 @@ class Repo(private val context: Context, private val settings: Settings) {
         return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
     }
 
+    // ---- Marcacoes --------------------------------------------------------
+
     @Synchronized
     fun registerPunch(employee: Employee, online: Boolean, faceStatus: String): Punch {
         val id = UUID.randomUUID().toString()
         val markedAt = TrustedClock.now()
         val terminal = settings.terminalId
+        val company = settings.companyName
+        val site = settings.siteName
         val prev = lastHash()
-        val hash = sha256("$id|${employee.cpf}|$markedAt|$terminal|$prev")
+        val hash = Secrets.sha256("$id|${employee.cpf}|$markedAt|$terminal|$company|$site|$prev")
         val values = ContentValues().apply {
             put("id", id)
             put("cpf", employee.cpf)
             put("name", employee.name)
             put("marked_at", markedAt)
             put("terminal", terminal)
+            put("company", company)
+            put("site", site)
             put("online", if (online) 1 else 0)
             put("face_status", faceStatus)
             put("prev_hash", prev)
@@ -247,8 +516,8 @@ class Repo(private val context: Context, private val settings: Settings) {
         }
         db.writableDatabase.insertOrThrow("punches", null, values)
         return Punch(
-            id, employee.cpf, employee.name, markedAt, terminal, online, faceStatus,
-            prev, hash, SyncStatus.PENDING, null
+            id, employee.cpf, employee.name, markedAt, terminal, company, site, online,
+            faceStatus, prev, hash, SyncStatus.PENDING, null
         )
     }
 
@@ -260,62 +529,139 @@ class Repo(private val context: Context, private val settings: Settings) {
         }
     }
 
-    fun pendingCount(): Int {
-        db.readableDatabase.rawQuery(
-            "SELECT COUNT(*) FROM punches WHERE sync_status = ?", arrayOf(SyncStatus.PENDING)
-        ).use { c ->
+    fun pendingCount(): Int = count("SELECT COUNT(*) FROM punches WHERE sync_status = '${SyncStatus.PENDING}'")
+
+    fun totalCount(): Int = count("SELECT COUNT(*) FROM punches")
+
+    fun employeeCount(): Int = count("SELECT COUNT(*) FROM employees")
+
+    private fun count(sql: String): Int {
+        db.readableDatabase.rawQuery(sql, null).use { c ->
             return if (c.moveToFirst()) c.getInt(0) else 0
         }
     }
 
-    fun totalCount(): Int {
-        db.readableDatabase.rawQuery("SELECT COUNT(*) FROM punches", null).use { c ->
-            return if (c.moveToFirst()) c.getInt(0) else 0
-        }
-    }
+    private val punchColumns = "id, cpf, name, marked_at, terminal, company, site, online, " +
+        "face_status, prev_hash, hash, sync_status, synced_at"
+
+    private fun readPunch(c: android.database.Cursor): Punch = Punch(
+        c.getString(0), c.getString(1), c.getString(2), c.getLong(3), c.getString(4),
+        c.getString(5), c.getString(6), c.getInt(7) == 1, c.getString(8), c.getString(9),
+        c.getString(10), c.getString(11), if (c.isNull(12)) null else c.getLong(12)
+    )
 
     fun recentPunches(limit: Int): List<Punch> {
         val out = ArrayList<Punch>()
         db.readableDatabase.rawQuery(
-            "SELECT id, cpf, name, marked_at, terminal, online, face_status, prev_hash, hash, " +
-                "sync_status, synced_at FROM punches ORDER BY seq DESC LIMIT $limit",
-            null
+            "SELECT $punchColumns FROM punches ORDER BY seq DESC LIMIT $limit", null
         ).use { c ->
-            while (c.moveToNext()) {
-                out.add(
-                    Punch(
-                        c.getString(0), c.getString(1), c.getString(2), c.getLong(3),
-                        c.getString(4), c.getInt(5) == 1, c.getString(6), c.getString(7),
-                        c.getString(8), c.getString(9),
-                        if (c.isNull(10)) null else c.getLong(10)
-                    )
-                )
-            }
+            while (c.moveToNext()) out.add(readPunch(c))
         }
         return out
     }
 
+    private fun pendingPunches(limit: Int): List<Punch> {
+        val out = ArrayList<Punch>()
+        db.readableDatabase.rawQuery(
+            "SELECT $punchColumns FROM punches WHERE sync_status = ? ORDER BY seq ASC LIMIT $limit",
+            arrayOf(SyncStatus.PENDING)
+        ).use { c ->
+            while (c.moveToNext()) out.add(readPunch(c))
+        }
+        return out
+    }
+
+    // ---- Sincronizacao ----------------------------------------------------
+
     /**
-     * Envia a fila pendente. No modo demonstracao o envio e simulado: os registros
-     * sao marcados como enviados quando ha conexao. Retorna a quantidade enviada.
+     * Envia a fila pendente ao servico REP-P (POST {url}/v1/punches).
+     * Um registro so vira "enviado" quando o servidor confirma o recebimento.
+     * Cada marcacao leva seu identificador unico, entao reenvios nao duplicam.
+     * `manual` registra tambem as falhas no historico.
      */
     @Synchronized
-    fun syncPending(): Int {
-        val pending = pendingCount()
-        if (pending == 0) return 0
-        if (!isOnline()) {
-            log(0, false, "Sem conexão. $pending registro(s) aguardando.")
+    fun syncPending(manual: Boolean): Int {
+        val batch = pendingPunches(200)
+        if (batch.isEmpty()) {
+            if (manual) log(0, true, "Nada a enviar.")
             return 0
         }
-        val values = ContentValues().apply {
-            put("sync_status", SyncStatus.SENT)
-            put("synced_at", TrustedClock.now())
+        val base = settings.apiUrl.trim().trimEnd('/')
+        if (base.isEmpty()) {
+            if (manual) log(0, false, "Servidor não configurado. ${batch.size} registro(s) aguardando.")
+            return 0
         }
-        val sent = db.writableDatabase.update(
-            "punches", values, "sync_status = ?", arrayOf(SyncStatus.PENDING)
-        )
-        log(sent, true, "Envio simulado (modo demonstração).")
-        return sent
+        if (!isOnline()) {
+            if (manual) log(0, false, "Sem conexão. ${batch.size} registro(s) aguardando.")
+            return 0
+        }
+        return try {
+            val body = JSONObject()
+            body.put("terminal", settings.terminalId)
+            body.put("company", settings.companyName)
+            body.put("site", settings.siteName)
+            val items = JSONArray()
+            for (p in batch) {
+                val o = JSONObject()
+                o.put("id", p.id)
+                o.put("cpf", p.cpf)
+                o.put("marked_at", Fmt.iso(p.markedAt))
+                o.put("terminal", p.terminal)
+                o.put("company", p.company)
+                o.put("site", p.site)
+                o.put("online", p.online)
+                o.put("face_status", p.faceStatus)
+                o.put("prev_hash", p.prevHash)
+                o.put("hash", p.hash)
+                items.put(o)
+            }
+            body.put("punches", items)
+
+            val conn = URL("$base/v1/punches").openConnection() as HttpURLConnection
+            conn.requestMethod = "POST"
+            conn.connectTimeout = 10_000
+            conn.readTimeout = 15_000
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            conn.setRequestProperty("Authorization", "Bearer " + settings.apiToken)
+            conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = conn.responseCode
+            if (code !in 200..299) {
+                conn.disconnect()
+                if (manual) log(0, false, "Servidor respondeu $code.")
+                return 0
+            }
+            val text = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            conn.disconnect()
+
+            val accepted = ArrayList<String>()
+            val json = JSONObject(text)
+            val list = json.optJSONArray("accepted")
+            if (list != null) {
+                for (i in 0 until list.length()) accepted.add(list.getString(i))
+            }
+            val serverTime = json.optLong("server_time_ms", 0L)
+            if (serverTime > 0L) TrustedClock.anchor(serverTime)
+
+            val now = TrustedClock.now()
+            val wdb = db.writableDatabase
+            var sent = 0
+            for (id in accepted) {
+                val values = ContentValues().apply {
+                    put("sync_status", SyncStatus.SENT)
+                    put("synced_at", now)
+                }
+                sent += wdb.update(
+                    "punches", values, "id = ? AND sync_status = ?",
+                    arrayOf(id, SyncStatus.PENDING)
+                )
+            }
+            log(sent, true, "Recebimento confirmado pelo servidor.")
+            sent
+        } catch (e: Exception) {
+            if (manual) log(0, false, "Falha no envio: " + (e.message ?: e.javaClass.simpleName))
+            0
+        }
     }
 
     private fun log(count: Int, ok: Boolean, message: String) {
@@ -340,10 +686,27 @@ class Repo(private val context: Context, private val settings: Settings) {
         return out
     }
 
-    private fun sha256(text: String): String {
-        val bytes = MessageDigest.getInstance("SHA-256").digest(text.toByteArray(Charsets.UTF_8))
-        val sb = StringBuilder()
-        for (b in bytes) sb.append(String.format("%02x", b))
-        return sb.toString()
+    // ---- Auditoria --------------------------------------------------------
+
+    fun audit(actor: String, action: String, detail: String) {
+        val values = ContentValues().apply {
+            put("at", TrustedClock.now())
+            put("actor", actor)
+            put("action", action)
+            put("detail", detail)
+        }
+        db.writableDatabase.insert("audit", null, values)
+    }
+
+    fun auditLog(limit: Int): List<AuditEntry> {
+        val out = ArrayList<AuditEntry>()
+        db.readableDatabase.rawQuery(
+            "SELECT at, actor, action, detail FROM audit ORDER BY seq DESC LIMIT $limit", null
+        ).use { c ->
+            while (c.moveToNext()) {
+                out.add(AuditEntry(c.getLong(0), c.getString(1), c.getString(2), c.getString(3)))
+            }
+        }
+        return out
     }
 }

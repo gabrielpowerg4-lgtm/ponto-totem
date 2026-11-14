@@ -39,12 +39,14 @@ data class FaceSample(
 fun FaceCamera(
     modifier: Modifier = Modifier,
     onSample: (FaceSample?) -> Unit,
-    onCameraError: () -> Unit
+    onCameraError: () -> Unit,
+    onReady: (snapshot: () -> android.graphics.Bitmap?) -> Unit = {}
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val currentOnSample by rememberUpdatedState(onSample)
     val currentOnError by rememberUpdatedState(onCameraError)
+    val currentOnReady by rememberUpdatedState(onReady)
 
     val previewView = remember {
         PreviewView(context).apply {
@@ -91,6 +93,8 @@ fun FaceCamera(
 
                     cameraProvider.unbindAll()
                     cameraProvider.bindToLifecycle(lifecycleOwner, selector, preview, analysis)
+                    // Entrega uma funcao que copia o quadro exibido, ja espelhado como na tela.
+                    currentOnReady { previewView.bitmap }
                 } catch (e: Exception) {
                     currentOnError()
                 }

@@ -16,7 +16,12 @@ import br.com.pontototem.kiosk.Kiosk
 import br.com.pontototem.ui.AdminPinScreen
 import br.com.pontototem.ui.AdminScreen
 import br.com.pontototem.ui.AppState
+import br.com.pontototem.ui.EmployeeFormScreen
+import br.com.pontototem.ui.EmployeesScreen
+import br.com.pontototem.ui.EnrollScreen
 import br.com.pontototem.ui.ErrorScreen
+import br.com.pontototem.ui.FaceTestScreen
+import br.com.pontototem.ui.SetupScreen
 import br.com.pontototem.ui.FaceScreen
 import br.com.pontototem.ui.HomeScreen
 import br.com.pontototem.ui.PasswordScreen
@@ -49,7 +54,7 @@ class MainActivity : ComponentActivity() {
                 while (true) {
                     val online = withContext(Dispatchers.IO) { repo.isOnline() }
                     if (online) {
-                        withContext(Dispatchers.IO) { repo.syncPending() }
+                        withContext(Dispatchers.IO) { repo.syncPending(false) }
                     }
                     state.online = online
                     state.pending = withContext(Dispatchers.IO) { repo.pendingCount() }
@@ -59,11 +64,22 @@ class MainActivity : ComponentActivity() {
 
             // O botao voltar nunca fecha o totem; apenas retorna ao inicio.
             BackHandler(enabled = true) {
-                if (state.screen != Screen.HOME) state.goHome()
+                when (state.screen) {
+                    Screen.HOME, Screen.SETUP -> Unit
+                    Screen.EMPLOYEES -> state.screen = Screen.ADMIN
+                    Screen.EMPLOYEE_FORM -> state.screen = Screen.EMPLOYEES
+                    Screen.ENROLL, Screen.FACE_TEST -> state.screen = Screen.EMPLOYEE_FORM
+                    else -> state.goHome()
+                }
             }
 
             PontoTheme(mode = state.themeMode) {
                 when (state.screen) {
+                    Screen.SETUP -> SetupScreen(state)
+                    Screen.EMPLOYEES -> EmployeesScreen(state)
+                    Screen.EMPLOYEE_FORM -> EmployeeFormScreen(state)
+                    Screen.ENROLL -> EnrollScreen(state)
+                    Screen.FACE_TEST -> FaceTestScreen(state)
                     Screen.HOME -> HomeScreen(state)
                     Screen.PASSWORD -> PasswordScreen(state)
                     Screen.FACE -> FaceScreen(state)

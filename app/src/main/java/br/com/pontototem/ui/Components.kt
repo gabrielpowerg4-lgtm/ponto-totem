@@ -1,6 +1,8 @@
 package br.com.pontototem.ui
 
+import android.graphics.BitmapFactory
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -31,11 +33,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -45,15 +50,19 @@ import br.com.pontototem.data.Employee
 import br.com.pontototem.data.Fmt
 import br.com.pontototem.data.Punch
 import br.com.pontototem.data.Repo
+import br.com.pontototem.data.Role
 import br.com.pontototem.data.Settings
 import br.com.pontototem.data.TrustedClock
 import kotlinx.coroutines.delay
 
-enum class Screen { HOME, PASSWORD, FACE, SUCCESS, RECEIPT, ERROR, ADMIN_PIN, ADMIN }
+enum class Screen {
+    SETUP, HOME, PASSWORD, FACE, SUCCESS, RECEIPT, ERROR,
+    ADMIN_PIN, ADMIN, EMPLOYEES, EMPLOYEE_FORM, ENROLL, FACE_TEST
+}
 
-/** Estado da interface. Vive enquanto a Activity vive. */
+/** Estado da interface. Vive enquanto a Activity vive, inclusive ao girar a tela. */
 class AppState(val repo: Repo, val settings: Settings) {
-    var screen by mutableStateOf(Screen.HOME)
+    var screen by mutableStateOf(if (settings.setupDone) Screen.HOME else Screen.SETUP)
     var cpf by mutableStateOf("")
     var employee by mutableStateOf<Employee?>(null)
     var punch by mutableStateOf<Punch?>(null)
@@ -61,14 +70,27 @@ class AppState(val repo: Repo, val settings: Settings) {
     var errorMessage by mutableStateOf("")
     var themeMode by mutableStateOf(settings.themeMode)
     var companyName by mutableStateOf(settings.companyName)
+    var siteName by mutableStateOf(settings.siteName)
     var terminalId by mutableStateOf(settings.terminalId)
     var online by mutableStateOf(false)
     var pending by mutableStateOf(0)
+    var logoVersion by mutableStateOf(0)
+
+    // Area administrativa
+    var role by mutableStateOf("")
+    var editingId by mutableStateOf<String?>(null)
+    var formMessage by mutableStateOf("")
+
+    /** Quem aparece na trilha de auditoria. */
+    fun actor(): String = if (role.isEmpty()) "Sistema" else Role.label(role)
 
     fun goHome() {
         cpf = ""
         employee = null
         punch = null
+        role = ""
+        editingId = null
+        formMessage = ""
         screen = Screen.HOME
     }
 
@@ -106,45 +128,103 @@ fun themeLabel(mode: String): String = when (mode) {
 // Estrutura das telas
 // ---------------------------------------------------------------------------
 
+/**
+ * Duas areas que se reorganizam sozinhas: lado a lado em paisagem,
+ * empilhadas em retrato. `secondCard` desenha a segunda area como cartao.
+ */
+@Composable
+fun AdaptivePanes(
+    firstWeight: Float,
+    secondWeight: Float,
+    secondCard: Boolean,
+    first: @Composable ColumnScope.() -> Unit,
+    second: @Composable ColumnScope.() -> Unit
+) {
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .padding(24.dp)
+    ) {
+        val portrait = maxHeight > maxWidth
+        val secondBody: @Composable (Modifier) -> Unit = { paneModifier ->
+            if (secondCard) {
+                Surface(
+                    modifier = paneModifier,
+                    shape = MaterialTheme.shapes.large,
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 28.dp, vertical = 24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        content = second
+                    )
+                }
+            } else {
+                Column(
+                    modifier = paneModifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    content = second
+                )
+            }
+        }
+        if (portrait) {
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(20.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .weight(firstWeight)
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    content = first
+                )
+                secondBody(
+                    Modifier
+                        .weight(secondWeight)
+                        .fillMaxWidth()
+                )
+            }
+        } else {
+            Row(
+                modifier = Modifier.fillMaxSize(),
+                horizontalArrangement = Arrangement.spacedBy(24.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    content = first
+                )
+                secondBody(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                )
+            }
+        }
+    }
+}
+
 @Composable
 fun SplitLayout(
     left: @Composable ColumnScope.() -> Unit,
     right: @Composable ColumnScope.() -> Unit
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .padding(24.dp),
-        horizontalArrangement = Arrangement.spacedBy(24.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxHeight()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            content = left
-        )
-        Surface(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxHeight(),
-            shape = MaterialTheme.shapes.large,
-            color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 28.dp, vertical = 24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                content = right
-            )
-        }
-    }
+    AdaptivePanes(
+        firstWeight = 0.32f,
+        secondWeight = 0.68f,
+        secondCard = true,
+        first = left,
+        second = right
+    )
 }
 
-/** Painel esquerdo: empresa, relogio com segundos, data, conexao e terminal. */
+/** Painel de informacoes: logotipo, empresa, obra, relogio com segundos, conexao e terminal. */
 @Composable
 fun ColumnScope.InfoPanel(state: AppState, onOpenAdmin: () -> Unit) {
     val now by produceState(initialValue = TrustedClock.now()) {
@@ -154,13 +234,37 @@ fun ColumnScope.InfoPanel(state: AppState, onOpenAdmin: () -> Unit) {
         }
     }
     val colors = MaterialTheme.colorScheme
+    val logo = remember(state.logoVersion) {
+        val path = state.repo.logoPath()
+        if (path == null) null else BitmapFactory.decodeFile(path)?.asImageBitmap()
+    }
 
+    if (logo != null) {
+        Image(
+            bitmap = logo,
+            contentDescription = "Logotipo de ${state.companyName}",
+            modifier = Modifier
+                .heightIn(max = 64.dp)
+                .widthIn(max = 260.dp),
+            contentScale = ContentScale.Fit,
+            alignment = Alignment.CenterStart
+        )
+        VSpace(10)
+    }
     Text(
         text = state.companyName,
         style = MaterialTheme.typography.titleLarge,
-        color = colors.onSurfaceVariant,
+        color = colors.onBackground,
         maxLines = 1
     )
+    if (state.siteName.isNotEmpty()) {
+        Text(
+            text = state.siteName,
+            style = MaterialTheme.typography.bodyLarge,
+            color = colors.onSurfaceVariant,
+            maxLines = 1
+        )
+    }
     Spacer(Modifier.weight(1f))
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val clockStyle = if (maxWidth < 520.dp) {
@@ -191,6 +295,7 @@ fun ColumnScope.InfoPanel(state: AppState, onOpenAdmin: () -> Unit) {
             text = "Terminal ${state.terminalId}",
             style = MaterialTheme.typography.labelMedium,
             color = colors.onSurfaceVariant,
+            maxLines = 1,
             modifier = Modifier
                 .pointerInput(Unit) {
                     detectTapGestures(onLongPress = { onOpenAdmin() })
@@ -306,8 +411,8 @@ fun Keypad(
     val rows = listOf("123", "456", "789")
     Column(
         modifier = modifier
-            .widthIn(max = 420.dp)
-            .heightIn(max = 340.dp),
+            .widthIn(max = 460.dp)
+            .heightIn(max = 380.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         for (row in rows) {
