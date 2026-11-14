@@ -51,11 +51,17 @@ class MainActivity : ComponentActivity() {
 
             // Conexao, fila pendente e envio automatico a cada 5 segundos.
             LaunchedEffect(Unit) {
+                var tick = 0
                 while (true) {
                     val online = withContext(Dispatchers.IO) { repo.isOnline() }
                     if (online) {
                         withContext(Dispatchers.IO) { repo.syncPending(false) }
+                        // Cadastro de funcionarios: ao abrir e depois a cada minuto.
+                        if (tick % 12 == 0) {
+                            withContext(Dispatchers.IO) { repo.syncEmployees(false) }
+                        }
                     }
+                    tick += 1
                     state.online = online
                     state.pending = withContext(Dispatchers.IO) { repo.pendingCount() }
                     delay(5_000)

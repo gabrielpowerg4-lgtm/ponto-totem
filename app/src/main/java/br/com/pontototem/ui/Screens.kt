@@ -598,6 +598,16 @@ fun ReceiptScreen(state: AppState) {
     val colors = MaterialTheme.colorScheme
     val status = LocalStatusColors.current
 
+    // Atualiza o NSR e o hash assim que o servidor confirma o registro.
+    var current by remember { mutableStateOf(punch) }
+    LaunchedEffect(punch.id) {
+        while (current.nsr == null) {
+            delay(1_500)
+            val fresh = withContext(Dispatchers.IO) { state.repo.punch(punch.id) }
+            if (fresh != null) current = fresh
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -622,8 +632,8 @@ fun ReceiptScreen(state: AppState) {
             )
             VSpace(12)
             Banner(
-                text = "Registro local da marcação. O comprovante oficial, com NSR e assinatura " +
-                    "digital, é emitido pelo servidor e enviado ao e-mail cadastrado.",
+                text = "Registro da marcação, ainda sem assinatura digital. O comprovante " +
+                    "oficial assinado e o envio por e-mail dependem do certificado da empresa.",
                 tone = status.warning
             )
             VSpace(16)
@@ -635,9 +645,12 @@ fun ReceiptScreen(state: AppState) {
             ReceiptRow("Terminal", punch.terminal)
             ReceiptRow("Origem", if (punch.online) "Marcação on-line" else "Marcação off-line")
             ReceiptRow("Validação facial", FaceStatus.label(punch.faceStatus))
-            ReceiptRow("NSR", "Atribuído pelo servidor após a sincronização")
+            ReceiptRow(
+                "NSR",
+                current.nsr?.toString()?.padStart(9, '0') ?: "Aguardando o registro no servidor"
+            )
             ReceiptRow("Identificador", punch.id, mono = true)
-            ReceiptRow("Hash SHA-256", punch.hash, mono = true)
+            ReceiptRow("Hash SHA-256", current.serverHash ?: "Aguardando o registro no servidor", mono = true)
         }
         VSpace(16)
         PrimaryButton(

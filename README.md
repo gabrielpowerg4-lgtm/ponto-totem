@@ -2,7 +2,8 @@
 
 Aplicativo Android (Kotlin + Jetpack Compose) de registro de ponto em tablet, em modo totem.
 Versão de validação: cadastro, autenticação, vivacidade e marcações funcionam no aparelho;
-o servidor REP-P (NSR, assinatura, comprovante por e-mail, Bubble) ainda não existe.
+as marcações sobem para o serviço REP-P, que atribui o NSR. Assinatura digital, comprovante
+por e-mail e Bubble ainda não foram implementados.
 
 ## Instalar
 
@@ -17,8 +18,26 @@ Baixe o APK mais recente em **Releases** e instale no tablet (Android 10 ou supe
 3. Em "Funcionários da obra", cadastre cada pessoa (nome, CPF, e-mail, senha de ponto)
    e capture a foto de referência.
 
-Sem endereço de servidor configurado, as marcações ficam guardadas no aparelho,
-como pendentes, até o servidor existir.
+4. Na área administrativa (perfil administrador), em "Vinculação ao servidor", informe a
+   chave da empresa. O servidor registra o terminal na obra e passa a receber as marcações.
+
+Sem vinculação, as marcações ficam guardadas no aparelho, como pendentes.
+
+## Servidor (serviço REP-P)
+
+Roda no Supabase (projeto `ponto-totem-br`, região São Paulo). A API fica em
+`supabase/functions/rep` e o banco é criado por migrações aplicadas no próprio projeto.
+
+| Rota | Uso |
+| --- | --- |
+| `POST /v1/enroll` | Vincula o terminal à empresa e à obra; devolve o token do terminal |
+| `POST /v1/punches` | Grava marcações com NSR por obra e hash encadeado; reenvios não duplicam |
+| `GET /v1/employees` | Funcionários autorizados na obra do terminal |
+| `POST /v1/employees` | Cadastros feitos ou alterados no tablet |
+| `GET /v1/time` | Hora do servidor |
+
+A tabela de marcações só aceita inserção. Ainda não há assinatura digital, comprovante em
+PDF, envio por e-mail, AFD nem integração com o Bubble.
 
 ## Modo totem completo (opcional)
 

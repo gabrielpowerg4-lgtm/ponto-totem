@@ -49,7 +49,9 @@ data class Punch(
     val prevHash: String,
     val hash: String,
     val syncStatus: String,
-    val syncedAt: Long?
+    val syncedAt: Long?,
+    val nsr: Long? = null,
+    val serverHash: String? = null
 )
 
 data class SyncEntry(val at: Long, val count: Int, val ok: Boolean, val message: String)
@@ -197,6 +199,8 @@ object Fmt {
 // Configuracoes do terminal
 // ---------------------------------------------------------------------------
 
+const val DEFAULT_API_URL = "https://mplacscrqtlgxmtkcrig.supabase.co/functions/v1/rep"
+
 class Settings(context: Context) {
     private val prefs = context.getSharedPreferences("terminal", Context.MODE_PRIVATE)
 
@@ -230,8 +234,20 @@ class Settings(context: Context) {
         set(v) = put("terminal_id", v)
 
     var apiUrl: String
-        get() = str("api_url")
+        get() = str("api_url", DEFAULT_API_URL)
         set(v) = put("api_url", v)
+
+    /** Empresa e obra confirmadas pelo servidor na vinculacao do terminal. */
+    var linkedCompany: String
+        get() = str("linked_company")
+        set(v) = put("linked_company", v)
+
+    var linkedSite: String
+        get() = str("linked_site")
+        set(v) = put("linked_site", v)
+
+    val isLinked: Boolean
+        get() = apiUrl.isNotBlank() && apiToken.isNotBlank()
 
     var apiToken: String
         get() = str("api_token")
@@ -262,7 +278,7 @@ class Settings(context: Context) {
 // Banco local
 // ---------------------------------------------------------------------------
 
-private class Db(context: Context) : SQLiteOpenHelper(context, "ponto.db", null, 2) {
+private class Db(context: Context) : SQLiteOpenHelper(context, "ponto.db", null, 3) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -291,6 +307,14 @@ private class Db(context: Context) : SQLiteOpenHelper(context, "ponto.db", null,
                 "message TEXT NOT NULL)"
         )
         createV2(db)
+        upgradeV3(db)
+    }
+
+    /** V3: numero e hash atribuidos pelo servidor, e controle de envio do cadastro. */
+    private fun upgradeV3(db: SQLiteDatabase) {
+        db.execSQL("ALTER TABLE punches ADD COLUMN nsr INTEGER")
+        db.execSQL("ALTER TABLE punches ADD COLUMN server_hash TEXT")
+        db.execSQL("ALTER TABLE employees ADD COLUMN synced_at INTEGER")
     }
 
     private fun createV2(db: SQLiteDatabase) {
@@ -322,6 +346,7 @@ private class Db(context: Context) : SQLiteOpenHelper(context, "ponto.db", null,
             db.execSQL("ALTER TABLE punches ADD COLUMN site TEXT NOT NULL DEFAULT ''")
             createV2(db)
         }
+        if (oldVersion < 3) upgradeV3(db)
     }
 }
 
@@ -542,13 +567,23 @@ class Repo(private val context: Context, private val settings: Settings) {
     }
 
     private val punchColumns = "id, cpf, name, marked_at, terminal, company, site, online, " +
-        "face_status, prev_hash, hash, sync_status, synced_at"
+        "face_status, prev_hash, hash, sync_status, synced_at, nsr, server_hash"
 
     private fun readPunch(c: android.database.Cursor): Punch = Punch(
         c.getString(0), c.getString(1), c.getString(2), c.getLong(3), c.getString(4),
         c.getString(5), c.getString(6), c.getInt(7) == 1, c.getString(8), c.getString(9),
-        c.getString(10), c.getString(11), if (c.isNull(12)) null else c.getLong(12)
+        c.getString(10), c.getString(11), if (c.isNull(12)) null else c.getLong(12),
+        if (c.isNull(13)) null else c.getLong(13),
+        if (c.isNull(14)) null else c.getString(14)
     )
+
+    fun punch(id: String): Punch? {
+        db.readableDatabase.rawQuery(
+            "SELECT $punchColumns FROM punches WHERE id = ?", arrayOf(id)
+        ).use { c ->
+            return if (c.moveToFirst()) readPunch(c) else null
+        }
+    }
 
     fun recentPunches(limit: Int): List<Punch> {
         val out = ArrayList<Punch>()
@@ -589,6 +624,10 @@ class Repo(private val context: Context, private val settings: Settings) {
         val base = settings.apiUrl.trim().trimEnd('/')
         if (base.isEmpty()) {
             if (manual) log(0, false, "Servidor não configurado. ${batch.size} registro(s) aguardando.")
+            return 0
+        }
+        if (settings.apiToken.isBlank()) {
+            if (manual) log(0, false, "Terminal não vinculado ao servidor. ${batch.size} registro(s) aguardando.")
             return 0
         }
         if (!isOnline()) {
@@ -640,6 +679,17 @@ class Repo(private val context: Context, private val settings: Settings) {
             if (list != null) {
                 for (i in 0 until list.length()) accepted.add(list.getString(i))
             }
+            // NSR e hash oficiais, atribuidos pelo servidor a cada marcacao.
+            val nsrById = HashMap<String, Long>()
+            val hashById = HashMap<String, String>()
+            val receipts = json.optJSONArray("receipts")
+            if (receipts != null) {
+                for (i in 0 until receipts.length()) {
+                    val r = receipts.getJSONObject(i)
+                    nsrById[r.getString("id")] = r.getLong("nsr")
+                    hashById[r.getString("id")] = r.getString("hash")
+                }
+            }
             val serverTime = json.optLong("server_time_ms", 0L)
             if (serverTime > 0L) TrustedClock.anchor(serverTime)
 
@@ -650,6 +700,8 @@ class Repo(private val context: Context, private val settings: Settings) {
                 val values = ContentValues().apply {
                     put("sync_status", SyncStatus.SENT)
                     put("synced_at", now)
+                    nsrById[id]?.let { put("nsr", it) }
+                    hashById[id]?.let { put("server_hash", it) }
                 }
                 sent += wdb.update(
                     "punches", values, "id = ? AND sync_status = ?",
@@ -660,6 +712,165 @@ class Repo(private val context: Context, private val settings: Settings) {
             sent
         } catch (e: Exception) {
             if (manual) log(0, false, "Falha no envio: " + (e.message ?: e.javaClass.simpleName))
+            0
+        }
+    }
+
+    // ---- Servidor: chamadas, vinculacao e cadastro --------------------------
+
+    private class HttpResult(val code: Int, val body: String)
+
+    private fun call(method: String, path: String, body: JSONObject?, token: String?): HttpResult {
+        val base = settings.apiUrl.trim().trimEnd('/')
+        val conn = URL(base + path).openConnection() as HttpURLConnection
+        try {
+            conn.requestMethod = method
+            conn.connectTimeout = 10_000
+            conn.readTimeout = 20_000
+            if (token != null) conn.setRequestProperty("Authorization", "Bearer $token")
+            if (body != null) {
+                conn.doOutput = true
+                conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            }
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+            return HttpResult(code, text)
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /**
+     * Vincula este terminal a empresa e a obra no servidor, usando a chave da empresa.
+     * Retorna a mensagem de sucesso; lanca IllegalStateException com o texto a exibir.
+     */
+    @Synchronized
+    fun enroll(companyKey: String, actor: String): String {
+        if (settings.apiUrl.isBlank()) throw IllegalStateException("Informe o endereço do servidor.")
+        if (!isOnline()) throw IllegalStateException("Sem conexão com a internet.")
+        val body = JSONObject()
+        body.put("company_key", companyKey.trim().uppercase(Locale.ROOT))
+        body.put("site", settings.siteName)
+        body.put("terminal_code", settings.terminalId)
+        body.put("responsible", settings.responsibleName)
+        val result = try {
+            call("POST", "/v1/enroll", body, null)
+        } catch (e: Exception) {
+            throw IllegalStateException("Não foi possível falar com o servidor.")
+        }
+        if (result.code == 403) throw IllegalStateException("Chave da empresa incorreta.")
+        if (result.code !in 200..299) {
+            throw IllegalStateException("O servidor respondeu ${result.code}.")
+        }
+        val json = JSONObject(result.body)
+        settings.apiToken = json.getString("terminal_token")
+        settings.linkedCompany = json.getJSONObject("company").getString("name")
+        settings.linkedSite = json.getJSONObject("site").getString("name")
+        val serverTime = json.optLong("server_time_ms", 0L)
+        if (serverTime > 0L) TrustedClock.anchor(serverTime)
+        audit(actor, "Terminal vinculado ao servidor", "${settings.linkedCompany} · ${settings.linkedSite}")
+        return "Terminal vinculado a ${settings.linkedCompany}, ${settings.linkedSite}."
+    }
+
+    /**
+     * Cadastro de funcionarios nos dois sentidos: envia o que mudou neste aparelho e
+     * recebe os autorizados para a obra. A foto de referencia nao sai do aparelho.
+     * Retorna quantos cadastros foram recebidos ou atualizados.
+     */
+    @Synchronized
+    fun syncEmployees(manual: Boolean): Int {
+        if (!settings.isLinked || !isOnline()) return 0
+        return try {
+            // 1. Envia os cadastros alterados aqui.
+            val changed = JSONArray()
+            val sentIds = ArrayList<Pair<String, Long>>()
+            db.readableDatabase.rawQuery(
+                "SELECT id, cpf, name, email, pin_hash, active, updated_at FROM employees " +
+                    "WHERE synced_at IS NULL OR updated_at > synced_at",
+                null
+            ).use { c ->
+                while (c.moveToNext()) {
+                    val o = JSONObject()
+                    o.put("cpf", c.getString(1))
+                    o.put("name", c.getString(2))
+                    o.put("email", c.getString(3))
+                    o.put("pin_hash", c.getString(4))
+                    o.put("active", c.getInt(5) == 1)
+                    o.put("updated_at_ms", c.getLong(6))
+                    changed.put(o)
+                    sentIds.add(Pair(c.getString(0), c.getLong(6)))
+                }
+            }
+            if (changed.length() > 0) {
+                val body = JSONObject()
+                body.put("employees", changed)
+                val pushed = call("POST", "/v1/employees", body, settings.apiToken)
+                if (pushed.code !in 200..299) {
+                    if (manual) log(0, false, "Cadastro: servidor respondeu ${pushed.code}.")
+                    return 0
+                }
+                val wdb = db.writableDatabase
+                for ((id, updatedAt) in sentIds) {
+                    val values = ContentValues().apply { put("synced_at", updatedAt) }
+                    wdb.update("employees", values, "id = ? AND updated_at = ?", arrayOf(id, updatedAt.toString()))
+                }
+            }
+
+            // 2. Recebe os funcionarios autorizados para esta obra.
+            val pulled = call("GET", "/v1/employees", null, settings.apiToken)
+            if (pulled.code !in 200..299) {
+                if (manual) log(0, false, "Cadastro: servidor respondeu ${pulled.code}.")
+                return 0
+            }
+            val pulledJson = JSONObject(pulled.body)
+            val serverTime = pulledJson.optLong("server_time_ms", 0L)
+            if (serverTime > 0L) TrustedClock.anchor(serverTime)
+            val list = pulledJson.optJSONArray("employees") ?: JSONArray()
+            var merged = 0
+            val wdb = db.writableDatabase
+            for (i in 0 until list.length()) {
+                val e = list.getJSONObject(i)
+                val cpf = e.getString("cpf")
+                val updatedAt = e.getLong("updated_at_ms")
+                var localId: String? = null
+                var localUpdated = 0L
+                wdb.rawQuery("SELECT id, updated_at FROM employees WHERE cpf = ?", arrayOf(cpf)).use { c ->
+                    if (c.moveToFirst()) {
+                        localId = c.getString(0)
+                        localUpdated = c.getLong(1)
+                    }
+                }
+                val values = ContentValues().apply {
+                    put("name", e.getString("name"))
+                    put("email", e.optString("email", ""))
+                    put("pin_hash", e.getString("pin_hash"))
+                    put("active", if (e.optBoolean("active", true)) 1 else 0)
+                    put("updated_at", updatedAt)
+                    put("synced_at", updatedAt)
+                }
+                val existing = localId
+                if (existing == null) {
+                    values.put("id", UUID.randomUUID().toString())
+                    values.put("cpf", cpf)
+                    values.put("created_at", TrustedClock.now())
+                    wdb.insertOrThrow("employees", null, values)
+                    merged += 1
+                } else if (updatedAt > localUpdated) {
+                    wdb.update("employees", values, "id = ?", arrayOf(existing))
+                    merged += 1
+                }
+            }
+            if (manual || merged > 0 || changed.length() > 0) {
+                log(
+                    changed.length(), true,
+                    "Cadastro: ${changed.length()} enviado(s), $merged recebido(s) ou atualizado(s)."
+                )
+            }
+            merged
+        } catch (e: Exception) {
+            if (manual) log(0, false, "Cadastro: falha na sincronização: " + (e.message ?: e.javaClass.simpleName))
             0
         }
     }

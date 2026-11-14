@@ -185,6 +185,19 @@ fun AdminScreen(state: AppState, onKioskChanged: (Boolean) -> Unit, onCloseApp: 
     var terminal by remember { mutableStateOf(settings.terminalId) }
     var apiUrl by remember { mutableStateOf(settings.apiUrl) }
     var apiToken by remember { mutableStateOf(settings.apiToken) }
+    var companyKey by remember { mutableStateOf("") }
+    var linking by remember { mutableStateOf(false) }
+    var linkError by remember { mutableStateOf("") }
+    var linkMessage by remember { mutableStateOf("") }
+    var linked by remember {
+        mutableStateOf(
+            if (settings.isLinked && settings.linkedCompany.isNotEmpty()) {
+                settings.linkedCompany + ", " + settings.linkedSite
+            } else {
+                ""
+            }
+        )
+    }
     var newAdminPin by remember { mutableStateOf("") }
     var newManagerPin by remember { mutableStateOf("") }
     var configMessage by remember { mutableStateOf("") }
@@ -306,7 +319,11 @@ fun AdminScreen(state: AppState, onKioskChanged: (Boolean) -> Unit, onCloseApp: 
             InfoRow("Conexão", if (state.online) "On-line" else "Off-line")
             InfoRow(
                 "Servidor",
-                if (settings.apiUrl.isBlank()) "Não configurado: as marcações ficam guardadas no aparelho" else settings.apiUrl
+                when {
+                    settings.apiUrl.isBlank() -> "Não configurado: as marcações ficam guardadas no aparelho"
+                    linked.isEmpty() -> "Não vinculado: as marcações ficam guardadas no aparelho"
+                    else -> "Vinculado a $linked"
+                }
             )
             InfoRow("Marcações a enviar", state.pending.toString())
             InfoRow("Marcações no aparelho", total.toString())
@@ -329,6 +346,7 @@ fun AdminScreen(state: AppState, onKioskChanged: (Boolean) -> Unit, onCloseApp: 
                         withContext(Dispatchers.IO) {
                             state.repo.audit(actor, "Sincronização manual", "")
                             state.repo.syncPending(true)
+                            state.repo.syncEmployees(true)
                         }
                         syncing = false
                         refresh += 1
@@ -359,7 +377,7 @@ fun AdminScreen(state: AppState, onKioskChanged: (Boolean) -> Unit, onCloseApp: 
                 InfoRow("Nenhuma marcação ainda", "", last = true)
             }
             for ((i, p) in punches.withIndex()) {
-                val sync = if (p.syncStatus == SyncStatus.SENT) "Enviado" else "Pendente"
+                val sync = if (p.nsr != null) "NSR ${p.nsr}" else if (p.syncStatus == SyncStatus.SENT) "Enviado" else "Pendente"
                 val origin = if (p.online) "on-line" else "off-line"
                 InfoRow(
                     Fmt.dateTime(p.markedAt),
@@ -383,13 +401,7 @@ fun AdminScreen(state: AppState, onKioskChanged: (Boolean) -> Unit, onCloseApp: 
             Field(
                 "Endereço do servidor REP-P", apiUrl, { apiUrl = it.trim() },
                 keyboard = KeyboardType.Uri,
-                supporting = "Exemplo: https://ponto.suaempresa.com.br. Em branco, nada é enviado."
-            )
-            VSpace(12)
-            Field(
-                "Chave de acesso do terminal", apiToken, { apiToken = it.trim() },
-                secret = true,
-                supporting = "Fornecida pelo servidor para este terminal."
+                supporting = "Já vem preenchido com o servidor do projeto. Em branco, nada é enviado."
             )
             VSpace(12)
             Field(
@@ -456,6 +468,62 @@ fun AdminScreen(state: AppState, onKioskChanged: (Boolean) -> Unit, onCloseApp: 
                             configMessage = "Configuração salva."
                             refresh += 1
                         }
+                    }
+                }
+            )
+
+            VSpace(24)
+            SectionTitle("Vinculação ao servidor")
+            Text(
+                text = if (linked.isNotEmpty()) {
+                    "Vinculado a $linked. Para vincular de novo, informe a chave da empresa."
+                } else {
+                    "Ainda não vinculado. Salve a configuração acima e informe a chave da empresa: " +
+                        "o servidor registra este terminal na obra indicada."
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.onSurfaceVariant
+            )
+            VSpace(12)
+            Field(
+                "Chave da empresa", companyKey,
+                { companyKey = it.uppercase().filter { c -> c.isLetterOrDigit() || c == '-' }.take(24) },
+                supporting = "Formato XXXX-XXXX-XXXX."
+            )
+            VSpace(12)
+            if (linkError.isNotEmpty()) {
+                Banner(text = linkError, tone = colors.error)
+                VSpace(12)
+            }
+            if (linkMessage.isNotEmpty()) {
+                Banner(text = linkMessage, tone = status.success)
+                VSpace(12)
+            }
+            PrimaryButton(
+                text = if (linking) "Vinculando" else "Vincular terminal",
+                enabled = !linking && companyKey.length >= 8,
+                modifier = Modifier.fillMaxWidth(),
+                onClick = {
+                    linking = true
+                    linkError = ""
+                    linkMessage = ""
+                    val key = companyKey
+                    scope.launch {
+                        try {
+                            linkMessage = withContext(Dispatchers.IO) {
+                                val message = state.repo.enroll(key, Role.label(Role.ADMIN))
+                                state.repo.syncEmployees(true)
+                                state.repo.syncPending(true)
+                                message
+                            }
+                            linked = settings.linkedCompany + ", " + settings.linkedSite
+                            apiToken = settings.apiToken
+                            companyKey = ""
+                        } catch (e: Exception) {
+                            linkError = e.message ?: "Não foi possível vincular."
+                        }
+                        linking = false
+                        refresh += 1
                     }
                 }
             )
