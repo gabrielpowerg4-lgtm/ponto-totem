@@ -198,7 +198,7 @@ fun EmployeeFormScreen(state: AppState) {
         Field(
             "E-mail", email, { email = it.trim() },
             keyboard = KeyboardType.Email,
-            supporting = "O comprovante de cada marcação é enviado para este endereço."
+            supporting = "Será usado para enviar o comprovante quando o envio por e-mail for ativado."
         )
         VSpace(12)
         Field(
