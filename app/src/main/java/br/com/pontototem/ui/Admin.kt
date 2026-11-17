@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import br.com.pontototem.data.AuditEntry
 import br.com.pontototem.data.Cpf
 import br.com.pontototem.data.Fmt
+import br.com.pontototem.data.LocationTracker
 import br.com.pontototem.data.Punch
 import br.com.pontototem.data.Role
 import br.com.pontototem.data.Secrets
@@ -320,6 +321,16 @@ fun AdminScreen(state: AppState, onKioskChanged: (Boolean) -> Unit, onCloseApp: 
             InfoRow("Responsável", settings.responsibleName)
             InfoRow("Terminal", settings.terminalId)
             InfoRow("Conexão", if (state.online) "On-line" else "Off-line")
+            val fix = LocationTracker.current()
+            InfoRow(
+                "Localização",
+                when {
+                    !LocationTracker.hasPermission(context) -> "Sem permissão: marcações sem coordenadas"
+                    fix == null -> "Aguardando sinal"
+                    else -> "Ativa, precisão de ${fix.accuracyM.toInt()} m"
+                }
+            )
+            InfoRow("Aparelho", state.repo.deviceModel())
             InfoRow(
                 "Servidor",
                 when {

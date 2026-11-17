@@ -34,6 +34,14 @@ async function bearerHash(req: Request): Promise<string | null> {
   return await sha256Hex(token);
 }
 
+// Dados do aparelho (modelo, sistema, versao do app, identificador da instalacao).
+function deviceOf(body: Record<string, unknown>): Record<string, unknown> | null {
+  const device = body.device;
+  return device && typeof device === "object" && !Array.isArray(device)
+    ? (device as Record<string, unknown>)
+    : null;
+}
+
 function failure(error: { message?: string } | null): Response {
   const message = error?.message ?? "";
   if (message.includes("invalid_token")) return json(401, { error: "invalid_token" });
@@ -65,6 +73,7 @@ Deno.serve(async (req: Request) => {
         p_code: String(body.terminal_code ?? ""),
         p_responsible: String(body.responsible ?? ""),
         p_token_hash: await sha256Hex(token),
+        p_device: deviceOf(body),
       });
       if (error) return failure(error);
       return json(200, { ...data, terminal_token: token, server_time_ms: now() });
@@ -81,6 +90,7 @@ Deno.serve(async (req: Request) => {
       const { data, error } = await db.rpc("rep_register_punches", {
         p_token_hash: tokenHash,
         p_punches: punches,
+        p_device: deviceOf(body),
       });
       if (error) return failure(error);
       const receipts = data.accepted as Array<{ id: string; nsr: number; hash: string }>;

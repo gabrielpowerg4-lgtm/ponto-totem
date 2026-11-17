@@ -49,6 +49,21 @@ object Kiosk {
         } catch (e: Exception) {
             // Mantem o app funcionando mesmo sem a trava.
         }
+        try {
+            val dpm = activity.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+            val admin = ComponentName(activity, AdminReceiver::class.java)
+            for (permission in listOf(
+                android.Manifest.permission.ACCESS_FINE_LOCATION,
+                android.Manifest.permission.ACCESS_COARSE_LOCATION
+            )) {
+                dpm.setPermissionGrantState(
+                    admin, activity.packageName, permission,
+                    DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED
+                )
+            }
+        } catch (e: Exception) {
+            // Versoes novas do Android podem exigir a permissao dada pelo operador.
+        }
     }
 
     fun unlock(activity: Activity) {

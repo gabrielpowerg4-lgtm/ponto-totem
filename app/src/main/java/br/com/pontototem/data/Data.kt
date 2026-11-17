@@ -54,7 +54,11 @@ data class Punch(
     val syncStatus: String,
     val syncedAt: Long?,
     val nsr: Long? = null,
-    val serverHash: String? = null
+    val serverHash: String? = null,
+    val latitude: Double? = null,
+    val longitude: Double? = null,
+    val accuracyM: Float? = null,
+    val locationAt: Long? = null
 )
 
 class FaceMatch(val status: String, val score: Float?)
@@ -262,6 +266,16 @@ class Settings(context: Context) {
         get() = str("linked_site")
         set(v) = put("linked_site", v)
 
+    /** Identificador desta instalacao do app (nao e um numero de serie do aparelho). */
+    val installId: String
+        get() {
+            val current = prefs.getString("install_id", null)
+            if (current != null) return current
+            val created = UUID.randomUUID().toString()
+            put("install_id", created)
+            return created
+        }
+
     val isLinked: Boolean
         get() = apiUrl.isNotBlank() && apiToken.isNotBlank()
 
@@ -299,7 +313,7 @@ class Settings(context: Context) {
 // Banco local
 // ---------------------------------------------------------------------------
 
-private class Db(context: Context) : SQLiteOpenHelper(context, "ponto.db", null, 3) {
+private class Db(context: Context) : SQLiteOpenHelper(context, "ponto.db", null, 4) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -329,6 +343,15 @@ private class Db(context: Context) : SQLiteOpenHelper(context, "ponto.db", null,
         )
         createV2(db)
         upgradeV3(db)
+        upgradeV4(db)
+    }
+
+    /** V4: posicao do terminal no momento da marcacao. */
+    private fun upgradeV4(db: SQLiteDatabase) {
+        db.execSQL("ALTER TABLE punches ADD COLUMN lat REAL")
+        db.execSQL("ALTER TABLE punches ADD COLUMN lng REAL")
+        db.execSQL("ALTER TABLE punches ADD COLUMN loc_accuracy REAL")
+        db.execSQL("ALTER TABLE punches ADD COLUMN loc_at INTEGER")
     }
 
     /** V3: numero e hash atribuidos pelo servidor, e controle de envio do cadastro. */
@@ -368,6 +391,7 @@ private class Db(context: Context) : SQLiteOpenHelper(context, "ponto.db", null,
             createV2(db)
         }
         if (oldVersion < 3) upgradeV3(db)
+        if (oldVersion < 4) upgradeV4(db)
     }
 }
 
@@ -610,10 +634,20 @@ class Repo(private val context: Context, private val settings: Settings) {
             put("hash", hash)
             put("sync_status", SyncStatus.PENDING)
         }
+        // Posicao do terminal: a leitura mais recente, sem atrasar a marcacao.
+        val fix = LocationTracker.current()
+        val fixAt = if (fix == null) null else markedAt - fix.ageMs
+        if (fix != null) {
+            values.put("lat", fix.latitude)
+            values.put("lng", fix.longitude)
+            values.put("loc_accuracy", fix.accuracyM)
+            values.put("loc_at", fixAt)
+        }
         db.writableDatabase.insertOrThrow("punches", null, values)
         return Punch(
             id, employee.cpf, employee.name, markedAt, terminal, company, site, online,
-            faceStatus, prev, hash, SyncStatus.PENDING, null
+            faceStatus, prev, hash, SyncStatus.PENDING, null, null, null,
+            fix?.latitude, fix?.longitude, fix?.accuracyM, fixAt
         )
     }
 
@@ -638,14 +672,19 @@ class Repo(private val context: Context, private val settings: Settings) {
     }
 
     private val punchColumns = "id, cpf, name, marked_at, terminal, company, site, online, " +
-        "face_status, prev_hash, hash, sync_status, synced_at, nsr, server_hash"
+        "face_status, prev_hash, hash, sync_status, synced_at, nsr, server_hash, " +
+        "lat, lng, loc_accuracy, loc_at"
 
     private fun readPunch(c: android.database.Cursor): Punch = Punch(
         c.getString(0), c.getString(1), c.getString(2), c.getLong(3), c.getString(4),
         c.getString(5), c.getString(6), c.getInt(7) == 1, c.getString(8), c.getString(9),
         c.getString(10), c.getString(11), if (c.isNull(12)) null else c.getLong(12),
         if (c.isNull(13)) null else c.getLong(13),
-        if (c.isNull(14)) null else c.getString(14)
+        if (c.isNull(14)) null else c.getString(14),
+        if (c.isNull(15)) null else c.getDouble(15),
+        if (c.isNull(16)) null else c.getDouble(16),
+        if (c.isNull(17)) null else c.getFloat(17),
+        if (c.isNull(18)) null else c.getLong(18)
     )
 
     fun punch(id: String): Punch? {
@@ -723,9 +762,16 @@ class Repo(private val context: Context, private val settings: Settings) {
                 o.put("face_status", p.faceStatus)
                 o.put("prev_hash", p.prevHash)
                 o.put("hash", p.hash)
+                if (p.latitude != null && p.longitude != null) {
+                    o.put("lat", p.latitude)
+                    o.put("lng", p.longitude)
+                    if (p.accuracyM != null) o.put("accuracy_m", p.accuracyM.toDouble())
+                    if (p.locationAt != null) o.put("location_at", Fmt.iso(p.locationAt))
+                }
                 items.put(o)
             }
             body.put("punches", items)
+            body.put("device", deviceInfo())
 
             val conn = URL("$base/v1/punches").openConnection() as HttpURLConnection
             conn.requestMethod = "POST"
@@ -789,6 +835,24 @@ class Repo(private val context: Context, private val settings: Settings) {
 
     // ---- Servidor: chamadas, vinculacao e cadastro --------------------------
 
+    fun deviceModel(): String =
+        (android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL).trim()
+
+    /** Dados do aparelho enviados ao servidor para auditoria. */
+    private fun deviceInfo(): JSONObject {
+        val version = try {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: ""
+        } catch (e: Exception) {
+            ""
+        }
+        val o = JSONObject()
+        o.put("model", deviceModel())
+        o.put("os", "Android " + android.os.Build.VERSION.RELEASE + " (API " + android.os.Build.VERSION.SDK_INT + ")")
+        o.put("app_version", version)
+        o.put("install_id", settings.installId)
+        return o
+    }
+
     private class HttpResult(val code: Int, val body: String)
 
     private fun call(method: String, path: String, body: JSONObject?, token: String?): HttpResult {
@@ -826,6 +890,7 @@ class Repo(private val context: Context, private val settings: Settings) {
         body.put("site", settings.siteName)
         body.put("terminal_code", settings.terminalId)
         body.put("responsible", settings.responsibleName)
+        body.put("device", deviceInfo())
         val result = try {
             call("POST", "/v1/enroll", body, null)
         } catch (e: Exception) {

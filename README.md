@@ -36,6 +36,14 @@ Roda no Supabase (projeto `ponto-totem-br`, região São Paulo). A API fica em
 | `POST /v1/employees` | Cadastros feitos ou alterados no tablet |
 | `GET /v1/time` | Hora do servidor |
 
+## Localização e aparelho
+
+Cada marcação leva a última posição conhecida do tablet (latitude, longitude e precisão),
+quando a permissão de localização foi concedida. A marcação nunca espera pelo GPS nem é
+bloqueada por falta dele. O servidor também guarda o modelo do aparelho, a versão do
+Android, a versão do app e um identificador da instalação, e registra em auditoria a
+troca de aparelho de um terminal.
+
 ## Validação facial
 
 Depois da piscada (vivacidade), o app compara o rosto com a foto de referência do

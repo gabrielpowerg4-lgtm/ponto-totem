@@ -1,15 +1,19 @@
 package br.com.pontototem
 
+import android.Manifest
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import br.com.pontototem.data.LocationTracker
 import br.com.pontototem.data.Repo
 import br.com.pontototem.data.Settings
 import br.com.pontototem.kiosk.Kiosk
@@ -48,6 +52,23 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val state = remember { AppState(repo, settings) }
+
+            // Localizacao do terminal: pede a permissao uma vez e passa a acompanhar a posicao.
+            val locationLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestMultiplePermissions()
+            ) { _ ->
+                LocationTracker.start(applicationContext)
+            }
+            LaunchedEffect(Unit) {
+                if (!LocationTracker.hasPermission(applicationContext)) {
+                    locationLauncher.launch(
+                        arrayOf(
+                            Manifest.permission.ACCESS_FINE_LOCATION,
+                            Manifest.permission.ACCESS_COARSE_LOCATION
+                        )
+                    )
+                }
+            }
 
             // Conexao, fila pendente e envio automatico a cada 5 segundos.
             LaunchedEffect(Unit) {
@@ -113,6 +134,12 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         hideSystemBars()
         if (settings.kioskLock) Kiosk.lock(this)
+        LocationTracker.start(applicationContext)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        LocationTracker.stop(applicationContext)
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {

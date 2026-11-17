@@ -718,6 +718,15 @@ fun ReceiptScreen(state: AppState) {
             ReceiptRow("CPF", Cpf.masked(punch.cpf))
             ReceiptRow("Data e hora", Fmt.dateTime(punch.markedAt) + " (UTC" + Fmt.zone() + ")")
             ReceiptRow("Terminal", punch.terminal)
+            ReceiptRow(
+                "Localização",
+                if (punch.latitude != null && punch.longitude != null) {
+                    String.format(java.util.Locale.US, "%.5f, %.5f", punch.latitude, punch.longitude) +
+                        (if (punch.accuracyM != null) " (precisão de ${punch.accuracyM.toInt()} m)" else "")
+                } else {
+                    "Não disponível nesta marcação"
+                }
+            )
             ReceiptRow("Origem", if (punch.online) "Marcação on-line" else "Marcação off-line")
             ReceiptRow("Validação facial", FaceStatus.label(punch.faceStatus))
             ReceiptRow(
