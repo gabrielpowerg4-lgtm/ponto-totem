@@ -74,6 +74,7 @@ class AppState(val repo: Repo, val settings: Settings) {
     var terminalId by mutableStateOf(settings.terminalId)
     var online by mutableStateOf(false)
     var pending by mutableStateOf(0)
+    var employeeCount by mutableStateOf(-1)
     var logoVersion by mutableStateOf(0)
 
     // Area administrativa
@@ -226,7 +227,11 @@ fun SplitLayout(
 
 /** Painel de informacoes: logotipo, empresa, obra, relogio com segundos, conexao e terminal. */
 @Composable
-fun ColumnScope.InfoPanel(state: AppState, onOpenAdmin: () -> Unit) {
+fun ColumnScope.InfoPanel(
+    state: AppState,
+    onOpenAdmin: () -> Unit,
+    showAdminButton: Boolean = false
+) {
     val now by produceState(initialValue = TrustedClock.now()) {
         while (true) {
             value = TrustedClock.now()
@@ -303,6 +308,9 @@ fun ColumnScope.InfoPanel(state: AppState, onOpenAdmin: () -> Unit) {
                 .padding(vertical = 10.dp)
         )
         Spacer(Modifier.weight(1f))
+        if (showAdminButton) {
+            Pill(text = "Administração", onClick = onOpenAdmin)
+        }
         Pill(
             text = "Tema: ${themeLabel(state.themeMode)}",
             onClick = { state.cycleTheme() }

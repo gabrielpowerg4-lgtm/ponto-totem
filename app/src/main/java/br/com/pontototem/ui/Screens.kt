@@ -64,7 +64,13 @@ import kotlin.math.abs
 @Composable
 fun HomeScreen(state: AppState) {
     SplitLayout(
-        left = { InfoPanel(state = state, onOpenAdmin = { state.screen = Screen.ADMIN_PIN }) },
+        left = {
+            InfoPanel(
+                state = state,
+                onOpenAdmin = { state.screen = Screen.ADMIN_PIN },
+                showAdminButton = true
+            )
+        },
         right = {
             val complete = state.cpf.length == 11
             val valid = complete && Cpf.isValid(state.cpf)
@@ -112,7 +118,12 @@ fun HomeScreen(state: AppState) {
             )
             VSpace(10)
             Text(
-                text = "Primeiro acesso? Procure o responsável da obra.",
+                text = if (state.employeeCount == 0) {
+                    "Nenhum funcionário cadastrado neste terminal. Toque em Administração, " +
+                        "entre com a senha e abra Funcionários da obra."
+                } else {
+                    "Primeiro acesso? Procure o responsável da obra."
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = colors.onSurfaceVariant,
                 textAlign = TextAlign.Center

@@ -64,6 +64,7 @@ class MainActivity : ComponentActivity() {
                     tick += 1
                     state.online = online
                     state.pending = withContext(Dispatchers.IO) { repo.pendingCount() }
+                    state.employeeCount = withContext(Dispatchers.IO) { repo.employeeCount() }
                     delay(5_000)
                 }
             }
