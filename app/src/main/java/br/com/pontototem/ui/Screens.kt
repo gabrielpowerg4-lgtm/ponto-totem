@@ -46,6 +46,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import br.com.pontototem.data.Cpf
+import android.graphics.Bitmap
+import br.com.pontototem.data.FaceMatch
 import br.com.pontototem.data.FaceStatus
 import br.com.pontototem.data.Fmt
 import br.com.pontototem.face.FaceCamera
@@ -240,6 +242,7 @@ private const val PHASE_SEARCHING = 0
 private const val PHASE_BLINK = 1
 private const val PHASE_EYES_CLOSED = 2
 private const val PHASE_DONE = 3
+private const val PHASE_MATCHING = 4
 private const val MAX_ATTEMPTS = 3
 
 /** Fluxo de marcacao: verifica a vivacidade e registra o ponto, validado ou sinalizado. */
@@ -256,7 +259,8 @@ fun FaceScreen(state: AppState) {
         unavailableDetail = "Sua marcação será registrada e sinalizada para o RH.",
         doneDetail = "Registrando sua marcação.",
         onCancel = { state.goHome() },
-        onResult = { faceStatus ->
+        verify = { frame -> state.repo.verifyFace(employee.id, frame) },
+        onResult = { faceStatus, _ ->
             scope.launch {
                 val punch = withContext(Dispatchers.IO) {
                     state.repo.registerPunch(employee, state.repo.isOnline(), faceStatus)
@@ -279,9 +283,11 @@ fun FaceCheck(
     unavailableDetail: String,
     doneDetail: String,
     onCancel: () -> Unit,
-    onResult: (String) -> Unit
+    verify: ((Bitmap) -> FaceMatch)? = null,
+    onResult: (String, Float?) -> Unit
 ) {
     val context = LocalContext.current
+    val matchScope = rememberCoroutineScope()
 
     var granted by remember {
         mutableStateOf(
@@ -295,6 +301,9 @@ fun FaceCheck(
     var steady by remember { mutableIntStateOf(0) }
     var attempt by remember { mutableIntStateOf(1) }
     var finished by remember { mutableStateOf(false) }
+    var snapshot by remember { mutableStateOf<(() -> Bitmap?)?>(null) }
+    var mismatched by remember { mutableStateOf(false) }
+    var lastScore by remember { mutableStateOf<Float?>(null) }
 
     val launcher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -303,10 +312,59 @@ fun FaceCheck(
         answered = true
     }
 
-    val finish: (String) -> Unit = { faceStatus ->
+    val finish: (String, Float?) -> Unit = { faceStatus, score ->
         if (!finished) {
             finished = true
-            onResult(faceStatus)
+            onResult(faceStatus, score)
+        }
+    }
+
+    // Depois da piscada, compara o rosto do quadro atual com a referencia do cadastro.
+    val startMatch: () -> Unit = {
+        val check = verify
+        val frame = snapshot?.invoke()
+        if (check == null) {
+            phase = PHASE_DONE
+            finish(FaceStatus.LIVENESS_OK, null)
+        } else if (frame == null) {
+            phase = PHASE_SEARCHING
+            steady = 0
+        } else {
+            phase = PHASE_MATCHING
+            matchScope.launch {
+                val result = try {
+                    withContext(Dispatchers.Default) { check(frame) }
+                } catch (e: Exception) {
+                    FaceMatch("", null)
+                }
+                if (!finished) {
+                    when (result.status) {
+                        FaceStatus.FACE_MATCH -> {
+                            phase = PHASE_DONE
+                            finish(FaceStatus.FACE_MATCH, result.score)
+                        }
+                        FaceStatus.NO_REFERENCE -> {
+                            phase = PHASE_DONE
+                            finish(FaceStatus.NO_REFERENCE, null)
+                        }
+                        FaceStatus.FACE_MISMATCH -> {
+                            mismatched = true
+                            lastScore = result.score
+                            if (attempt >= MAX_ATTEMPTS) {
+                                finish(FaceStatus.FACE_MISMATCH, result.score)
+                            } else {
+                                attempt += 1
+                                phase = PHASE_SEARCHING
+                                steady = 0
+                            }
+                        }
+                        else -> {
+                            phase = PHASE_SEARCHING
+                            steady = 0
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -320,7 +378,7 @@ fun FaceCheck(
     LaunchedEffect(unavailable) {
         if (unavailable) {
             delay(2_500)
-            finish(FaceStatus.CAMERA_UNAVAILABLE)
+            finish(FaceStatus.CAMERA_UNAVAILABLE, null)
         }
     }
 
@@ -330,7 +388,11 @@ fun FaceCheck(
             delay(12_000)
             if (!finished) {
                 if (attempt >= MAX_ATTEMPTS) {
-                    finish(FaceStatus.NOT_VALIDATED)
+                    if (mismatched) {
+                        finish(FaceStatus.FACE_MISMATCH, lastScore)
+                    } else {
+                        finish(FaceStatus.NOT_VALIDATED, null)
+                    }
                 } else {
                     attempt += 1
                     phase = PHASE_SEARCHING
@@ -361,10 +423,7 @@ fun FaceCheck(
                         }
                     }
                     PHASE_BLINK -> if (closed) phase = PHASE_EYES_CLOSED
-                    PHASE_EYES_CLOSED -> if (open) {
-                        phase = PHASE_DONE
-                        finish(FaceStatus.LIVENESS_OK)
-                    }
+                    PHASE_EYES_CLOSED -> if (open) startMatch()
                     else -> Unit
                 }
             }
@@ -391,7 +450,8 @@ fun FaceCheck(
                     FaceCamera(
                         modifier = Modifier.fillMaxSize(),
                         onSample = onSample,
-                        onCameraError = { cameraFailed = true }
+                        onCameraError = { cameraFailed = true },
+                        onReady = { fn -> snapshot = fn }
                     )
                     val guide = when (phase) {
                         PHASE_SEARCHING -> colors.outline
@@ -419,12 +479,16 @@ fun FaceCheck(
                 unavailable -> "Seguindo sem validação facial"
                 phase == PHASE_SEARCHING -> "Posicione o rosto dentro da área"
                 phase == PHASE_DONE -> "Tudo certo"
+                phase == PHASE_MATCHING -> "Conferindo o rosto"
                 else -> "Agora pisque os olhos"
             }
             val detail = when {
                 unavailable -> unavailableDetail
+                phase == PHASE_SEARCHING && mismatched ->
+                    "O rosto não conferiu com o cadastro. Tente de novo, de frente e com boa luz."
                 phase == PHASE_SEARCHING -> "Olhe para a câmera, de frente, com o rosto descoberto."
                 phase == PHASE_DONE -> doneDetail
+                phase == PHASE_MATCHING -> "Aguarde um instante."
                 else -> "Feche e abra os olhos uma vez, devagar."
             }
             Text(
@@ -560,7 +624,7 @@ fun SuccessScreen(state: AppState) {
                     tone = status.warning
                 )
             }
-            if (punch.faceStatus != FaceStatus.LIVENESS_OK) {
+            if (!FaceStatus.isValidated(punch.faceStatus)) {
                 Banner(text = FaceStatus.label(punch.faceStatus) + ".", tone = status.warning)
             }
         }

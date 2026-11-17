@@ -184,6 +184,9 @@ fun AdminScreen(state: AppState, onKioskChanged: (Boolean) -> Unit, onCloseApp: 
     var responsible by remember { mutableStateOf(settings.responsibleName) }
     var terminal by remember { mutableStateOf(settings.terminalId) }
     var apiUrl by remember { mutableStateOf(settings.apiUrl) }
+    var faceMin by remember {
+        mutableStateOf(String.format(java.util.Locale.US, "%.2f", settings.faceThreshold))
+    }
     var apiToken by remember { mutableStateOf(settings.apiToken) }
     var companyKey by remember { mutableStateOf("") }
     var linking by remember { mutableStateOf(false) }
@@ -405,6 +408,14 @@ fun AdminScreen(state: AppState, onKioskChanged: (Boolean) -> Unit, onCloseApp: 
             )
             VSpace(12)
             Field(
+                "Semelhança mínima do rosto", faceMin,
+                { faceMin = it.replace(',', '.').filter { c -> c.isDigit() || c == '.' }.take(4) },
+                keyboard = KeyboardType.Decimal,
+                supporting = "De 0.30 a 0.80. Padrão 0.50. Maior é mais rigoroso; use o teste de " +
+                    "validação do funcionário para ver a semelhança medida."
+            )
+            VSpace(12)
+            Field(
                 "Nova senha do administrador (opcional)", newAdminPin,
                 { newAdminPin = it.filter { c -> c.isDigit() }.take(8) },
                 keyboard = KeyboardType.NumberPassword, secret = true
@@ -435,6 +446,8 @@ fun AdminScreen(state: AppState, onKioskChanged: (Boolean) -> Unit, onCloseApp: 
                         terminal.isBlank() -> "Informe o identificador do terminal."
                         apiUrl.isNotEmpty() && !apiUrl.startsWith("https://") ->
                             "O endereço do servidor deve começar com https://."
+                        (faceMin.toFloatOrNull() ?: 0f) !in 0.30f..0.80f ->
+                            "A semelhança mínima do rosto deve ficar entre 0.30 e 0.80."
                         newAdminPin.isNotEmpty() && !isPin(newAdminPin) ->
                             "A senha do administrador deve ter de 4 a 8 números."
                         newManagerPin.isNotEmpty() && !isPin(newManagerPin) ->
@@ -451,6 +464,7 @@ fun AdminScreen(state: AppState, onKioskChanged: (Boolean) -> Unit, onCloseApp: 
                                 settings.responsibleName = responsible.trim()
                                 settings.terminalId = terminal.trim()
                                 settings.apiUrl = apiUrl
+                                settings.faceThreshold = faceMin.toFloatOrNull() ?: settings.faceThreshold
                                 settings.apiToken = apiToken
                                 if (adminPin.isNotEmpty()) settings.adminPinHash = Secrets.hash(adminPin)
                                 if (managerPin.isNotEmpty()) settings.managerPinHash = Secrets.hash(managerPin)

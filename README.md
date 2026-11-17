@@ -36,6 +36,13 @@ Roda no Supabase (projeto `ponto-totem-br`, região São Paulo). A API fica em
 | `POST /v1/employees` | Cadastros feitos ou alterados no tablet |
 | `GET /v1/time` | Hora do servidor |
 
+## Validação facial
+
+Depois da piscada (vivacidade), o app compara o rosto com a foto de referência do
+funcionário, tudo no aparelho, com o modelo MobileFaceNet (ver `THIRD_PARTY.md`). A
+semelhança mínima é configurável na área administrativa (padrão 0.50). Se o rosto não
+conferir em 3 tentativas, a marcação é registrada e sinalizada, nunca bloqueada.
+
 A tabela de marcações só aceita inserção. Ainda não há assinatura digital, comprovante em
 PDF, envio por e-mail, AFD nem integração com o Bubble.
 

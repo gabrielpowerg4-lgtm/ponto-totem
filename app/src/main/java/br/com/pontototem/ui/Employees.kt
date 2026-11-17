@@ -38,6 +38,7 @@ import androidx.core.content.ContextCompat
 import br.com.pontototem.data.Cpf
 import br.com.pontototem.data.Employee
 import br.com.pontototem.data.FaceStatus
+import java.util.Locale
 import br.com.pontototem.data.Fmt
 import br.com.pontototem.face.FaceCamera
 import br.com.pontototem.face.FaceSample
@@ -481,7 +482,8 @@ fun EnrollScreen(state: AppState) {
                                     state.formMessage = "Foto de referência registrada."
                                     state.screen = Screen.EMPLOYEE_FORM
                                 } catch (e: Exception) {
-                                    error = "Não foi possível salvar a foto. Tente de novo."
+                                    error = (e as? IllegalStateException)?.message
+                                        ?: "Não foi possível salvar a foto. Tente de novo."
                                     busy = false
                                 }
                             }
@@ -516,22 +518,40 @@ private fun toJpeg(source: Bitmap): ByteArray {
 @Composable
 fun FaceTestScreen(state: AppState) {
     val scope = rememberCoroutineScope()
+    val employeeId = state.editingId
+    if (employeeId == null) {
+        LaunchedEffect(Unit) { state.screen = Screen.EMPLOYEES }
+        return
+    }
     FaceCheck(
         greeting = "Teste de validação facial",
         unavailableDetail = "Não foi possível usar a câmera neste teste.",
         doneDetail = "Validação concluída.",
         onCancel = { state.screen = Screen.EMPLOYEE_FORM },
-        onResult = { faceStatus ->
+        verify = { frame -> state.repo.verifyFace(employeeId, frame) },
+        onResult = { faceStatus, score ->
             val actor = state.actor()
+            val minimum = String.format(Locale.US, "%.2f", state.settings.faceThreshold)
+            val measured = if (score == null) "" else String.format(Locale.US, "%.2f", score)
             scope.launch {
                 withContext(Dispatchers.IO) {
-                    state.repo.audit(actor, "Teste de validação facial", FaceStatus.label(faceStatus))
+                    state.repo.audit(
+                        actor, "Teste de validação facial",
+                        FaceStatus.label(faceStatus) + (if (measured.isEmpty()) "" else " · semelhança $measured")
+                    )
                 }
-                state.formMessage = if (faceStatus == FaceStatus.LIVENESS_OK) {
-                    "Teste aprovado: a câmera reconheceu um rosto de frente e a piscada."
-                } else {
-                    "Teste não aprovado: " + FaceStatus.label(faceStatus).lowercase() +
-                        ". Confira a iluminação e refaça."
+                state.formMessage = when (faceStatus) {
+                    FaceStatus.FACE_MATCH ->
+                        "Teste aprovado: o rosto conferiu com a foto de referência " +
+                            "(semelhança $measured, mínimo $minimum)."
+                    FaceStatus.FACE_MISMATCH ->
+                        "Teste não aprovado: o rosto não conferiu com a foto de referência " +
+                            "(semelhança $measured, mínimo $minimum). Refaça a foto ou o teste."
+                    FaceStatus.NO_REFERENCE ->
+                        "Teste não concluído: capture antes a foto de referência."
+                    else ->
+                        "Teste não aprovado: " + FaceStatus.label(faceStatus).lowercase() +
+                            ". Confira a iluminação e refaça."
                 }
                 state.screen = Screen.EMPLOYEE_FORM
             }

@@ -4,9 +4,12 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.SystemClock
+import br.com.pontototem.face.FaceMatcher
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -54,16 +57,27 @@ data class Punch(
     val serverHash: String? = null
 )
 
+class FaceMatch(val status: String, val score: Float?)
+
 data class SyncEntry(val at: Long, val count: Int, val ok: Boolean, val message: String)
 
 data class AuditEntry(val at: Long, val actor: String, val action: String, val detail: String)
 
 object FaceStatus {
+    const val FACE_MATCH = "ROSTO_CONFERE"
+    const val FACE_MISMATCH = "ROSTO_NAO_CONFERE"
+    const val NO_REFERENCE = "SEM_REFERENCIA"
     const val LIVENESS_OK = "VIVACIDADE_OK"
     const val NOT_VALIDATED = "SEM_VALIDACAO"
     const val CAMERA_UNAVAILABLE = "CAMERA_INDISPONIVEL"
 
+    /** Rosto conferido com o cadastro (ou, em registros antigos, so a vivacidade). */
+    fun isValidated(status: String): Boolean = status == FACE_MATCH || status == LIVENESS_OK
+
     fun label(status: String): String = when (status) {
+        FACE_MATCH -> "Rosto conferido com o cadastro"
+        FACE_MISMATCH -> "Rosto não conferiu com o cadastro, marcação sinalizada"
+        NO_REFERENCE -> "Sem foto de referência, marcação sinalizada"
         LIVENESS_OK -> "Vivacidade verificada"
         CAMERA_UNAVAILABLE -> "Câmera indisponível, marcação sinalizada"
         else -> "Sem validação biométrica, marcação sinalizada"
@@ -199,6 +213,8 @@ object Fmt {
 // Configuracoes do terminal
 // ---------------------------------------------------------------------------
 
+const val DEFAULT_FACE_THRESHOLD = 0.5f
+
 const val DEFAULT_API_URL = "https://mplacscrqtlgxmtkcrig.supabase.co/functions/v1/rep"
 
 class Settings(context: Context) {
@@ -260,6 +276,11 @@ class Settings(context: Context) {
     var managerPinHash: String
         get() = str("manager_pin_hash")
         set(v) = put("manager_pin_hash", v)
+
+    /** Semelhanca minima (cosseno) para o rosto conferir com o cadastro. */
+    var faceThreshold: Float
+        get() = prefs.getFloat("face_threshold", DEFAULT_FACE_THRESHOLD)
+        set(v) = prefs.edit().putFloat("face_threshold", v).apply()
 
     var themeMode: String
         get() = str("theme", "SYSTEM")
@@ -358,6 +379,7 @@ class Repo(private val context: Context, private val settings: Settings) {
     private val db = Db(context.applicationContext)
     private val faceDir = File(context.filesDir, "faces")
     private val logoFile = File(context.filesDir, "logo.png")
+    private val matcher = FaceMatcher(context.applicationContext)
 
     // ---- Funcionarios -----------------------------------------------------
 
@@ -468,8 +490,17 @@ class Repo(private val context: Context, private val settings: Settings) {
     /** Guarda a foto de referencia cifrada com chave do Android Keystore. */
     @Synchronized
     fun saveFace(employeeId: String, jpeg: ByteArray, actor: String) {
+        // A referencia biometrica (vetor) e calculada na hora; sem rosto utilizavel, nao salva.
+        val image = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
+        val vector = if (image == null) null else matcher.embed(image)
+        if (vector == null) {
+            throw IllegalStateException(
+                "Não foi possível localizar o rosto na foto. Aproxime-se, de frente, com boa luz."
+            )
+        }
         faceDir.mkdirs()
         File(faceDir, "$employeeId.bin").writeBytes(FaceVault.encrypt(jpeg))
+        File(faceDir, "$employeeId.emb").writeBytes(FaceVault.encrypt(FaceMatcher.toBytes(vector)))
         val values = ContentValues().apply {
             put("face_at", TrustedClock.now())
             put("updated_at", TrustedClock.now())
@@ -487,6 +518,46 @@ class Repo(private val context: Context, private val settings: Settings) {
         } catch (e: Exception) {
             null
         }
+    }
+
+    /** Vetor de referencia do funcionario; para fotos antigas, calcula e guarda na primeira vez. */
+    private fun referenceVector(employeeId: String): FloatArray? {
+        val file = File(faceDir, "$employeeId.emb")
+        if (file.exists()) {
+            try {
+                val stored = FaceMatcher.fromBytes(FaceVault.decrypt(file.readBytes()))
+                if (stored != null) return stored
+            } catch (e: Exception) {
+                // Recalcula a partir da foto.
+            }
+        }
+        val jpeg = loadFace(employeeId) ?: return null
+        val image = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size) ?: return null
+        val vector = matcher.embed(image) ?: return null
+        file.writeBytes(FaceVault.encrypt(FaceMatcher.toBytes(vector)))
+        return vector
+    }
+
+    /**
+     * Compara o rosto do quadro com a referencia do funcionario. Tudo no aparelho.
+     * `status` vazio significa que nenhum rosto utilizavel foi achado no quadro.
+     */
+    fun verifyFace(employeeId: String, frame: Bitmap): FaceMatch {
+        val reference: FloatArray? = try {
+            referenceVector(employeeId)
+        } catch (e: Exception) {
+            null
+        }
+        if (reference == null) return FaceMatch(FaceStatus.NO_REFERENCE, null)
+        val probe: FloatArray? = try {
+            matcher.embed(frame)
+        } catch (e: Exception) {
+            null
+        }
+        if (probe == null) return FaceMatch("", null)
+        val score = FaceMatcher.cosine(reference, probe)
+        val ok = score >= settings.faceThreshold
+        return FaceMatch(if (ok) FaceStatus.FACE_MATCH else FaceStatus.FACE_MISMATCH, score)
     }
 
     // ---- Logotipo ---------------------------------------------------------
