@@ -2,6 +2,7 @@
 // Autenticacao propria: cada terminal tem um token, guardado no banco so como hash.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { buildAej, buildAfd, FiscalError } from "./fiscal.ts";
 
 const db = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -46,7 +47,12 @@ function failure(error: { message?: string } | null): Response {
   const message = error?.message ?? "";
   if (message.includes("invalid_token")) return json(401, { error: "invalid_token" });
   if (message.includes("invalid_key")) return json(403, { error: "invalid_key" });
-  if (message.includes("missing_fields")) return json(400, { error: "missing_fields" });
+  for (const code of [
+    "missing_fields", "invalid_employer_id", "invalid_cno", "invalid_caepf",
+    "invalid_responsible_cpf", "invalid_schedule", "invalid_period",
+  ]) {
+    if (message.includes(code)) return json(400, { error: code });
+  }
   console.error("rep error:", message);
   return json(500, { error: "server_error" });
 }
@@ -119,6 +125,58 @@ Deno.serve(async (req: Request) => {
       });
       if (error) return failure(error);
       return json(200, { saved: data, server_time_ms: now() });
+    }
+
+    // Dados do empregador, da obra e do responsavel (usados no AFD e no AEJ).
+    if (req.method === "GET" && path.endsWith("/v1/employer")) {
+      const { data, error } = await db.rpc("rep_get_employer", { p_token_hash: tokenHash });
+      if (error) return failure(error);
+      return json(200, { employer: data, server_time_ms: now() });
+    }
+
+    if (req.method === "POST" && path.endsWith("/v1/employer")) {
+      const body = await req.json();
+      const { data, error } = await db.rpc("rep_set_employer", {
+        p_token_hash: tokenHash,
+        p_data: body.employer ?? {},
+      });
+      if (error) return failure(error);
+      return json(200, { employer: data, server_time_ms: now() });
+    }
+
+    // Arquivos fiscais da obra do terminal: AFD ou AEJ, no periodo informado.
+    if (req.method === "POST" && path.endsWith("/v1/fiscal")) {
+      const body = await req.json();
+      const kind = String(body.kind ?? "");
+      const from = String(body.from ?? "");
+      const to = String(body.to ?? "");
+      if (!["afd", "aej"].includes(kind) || !/^\d{4}-\d{2}-\d{2}$/.test(from) ||
+          !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+        return json(400, { error: "invalid_period" });
+      }
+      const { data, error } = await db.rpc("rep_fiscal_data", {
+        p_token_hash: tokenHash,
+        p_from: from,
+        p_to: to,
+      });
+      if (error) return failure(error);
+      try {
+        const file = kind === "afd"
+          ? await buildAfd(data.head, data.afd, from, to)
+          : buildAej(data.head, data.marks, data.employees, from, to);
+        let binary = "";
+        for (const b of file.bytes) binary += String.fromCharCode(b);
+        return json(200, {
+          filename: file.filename,
+          content_base64: btoa(binary),
+          records: file.records,
+          warnings: file.warnings,
+          server_time_ms: now(),
+        });
+      } catch (e) {
+        if (e instanceof FiscalError) return json(400, { error: e.message });
+        throw e;
+      }
     }
 
     return json(404, { error: "not_found" });

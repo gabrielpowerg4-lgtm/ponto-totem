@@ -877,6 +877,71 @@ class Repo(private val context: Context, private val settings: Settings) {
         }
     }
 
+    // ---- Arquivos fiscais (AFD e AEJ) --------------------------------------
+
+    private fun serverMessage(result: HttpResult): String {
+        val code = try {
+            JSONObject(result.body).optString("error", "")
+        } catch (e: Exception) {
+            ""
+        }
+        return when (code) {
+            "invalid_token" -> "Terminal não vinculado ao servidor. Vincule na área administrativa."
+            "invalid_employer_id" -> "Informe um CNPJ com 14 números ou um CPF com 11 números."
+            "missing_fields" -> "Informe a razão social ou o nome do empregador."
+            "invalid_cno" -> "O CNO deve ter 12 números, ou ficar em branco."
+            "invalid_caepf" -> "O CAEPF deve ter 14 números, ou ficar em branco."
+            "invalid_responsible_cpf" -> "Informe o CPF do responsável com 11 números."
+            "invalid_schedule" -> "Horário contratual inválido: use pares de entrada e saída no formato 0700."
+            "invalid_period" -> "Período inválido: use datas no formato AAAA-MM-DD, de até 366 dias."
+            "employer_missing" -> "Cadastre antes os dados do empregador (CNPJ ou CPF e razão social)."
+            "schedule_missing" -> "Cadastre o horário contratual da obra antes de gerar o AEJ."
+            else -> "O servidor respondeu ${result.code}."
+        }
+    }
+
+    private fun fiscalCall(method: String, path: String, body: JSONObject?): JSONObject {
+        if (!settings.isLinked) {
+            throw IllegalStateException("Terminal não vinculado ao servidor. Vincule na área administrativa.")
+        }
+        if (!isOnline()) throw IllegalStateException("Sem conexão com a internet.")
+        val result = try {
+            call(method, path, body, settings.apiToken)
+        } catch (e: Exception) {
+            throw IllegalStateException("Não foi possível falar com o servidor.")
+        }
+        if (result.code !in 200..299) throw IllegalStateException(serverMessage(result))
+        return JSONObject(result.body)
+    }
+
+    /** Dados do empregador, da obra, do horario contratual e do responsavel, no servidor. */
+    fun loadEmployer(): JSONObject = fiscalCall("GET", "/v1/employer", null).getJSONObject("employer")
+
+    fun saveEmployer(data: JSONObject, actor: String): JSONObject {
+        val body = JSONObject()
+        body.put("employer", data)
+        val saved = fiscalCall("POST", "/v1/employer", body).getJSONObject("employer")
+        audit(actor, "Dados do empregador salvos", saved.optString("legal_name"))
+        return saved
+    }
+
+    class FiscalFile(val filename: String, val bytes: ByteArray, val records: Int, val warnings: List<String>)
+
+    /** Gera o AFD ou o AEJ da obra no servidor. `kind`: "afd" ou "aej"; datas AAAA-MM-DD. */
+    fun fiscalFile(kind: String, from: String, to: String, actor: String): FiscalFile {
+        val body = JSONObject()
+        body.put("kind", kind)
+        body.put("from", from)
+        body.put("to", to)
+        val json = fiscalCall("POST", "/v1/fiscal", body)
+        val warnings = ArrayList<String>()
+        val list = json.optJSONArray("warnings")
+        if (list != null) for (i in 0 until list.length()) warnings.add(list.getString(i))
+        val bytes = android.util.Base64.decode(json.getString("content_base64"), android.util.Base64.DEFAULT)
+        audit(actor, "Arquivo ${kind.uppercase(Locale.ROOT)} gerado", "$from a $to")
+        return FiscalFile(json.getString("filename"), bytes, json.optInt("records", 0), warnings)
+    }
+
     /**
      * Vincula este terminal a empresa e a obra no servidor, usando a chave da empresa.
      * Retorna a mensagem de sucesso; lanca IllegalStateException com o texto a exibir.

@@ -312,6 +312,14 @@ fun AdminScreen(state: AppState, onKioskChanged: (Boolean) -> Unit, onCloseApp: 
             modifier = Modifier.fillMaxWidth(),
             onClick = { state.screen = Screen.EMPLOYEES }
         )
+        if (isAdmin) {
+            VSpace(12)
+            SecondaryButton(
+                text = "Arquivos fiscais (AFD e AEJ)",
+                modifier = Modifier.fillMaxWidth(),
+                onClick = { state.screen = Screen.FISCAL }
+            )
+        }
 
         VSpace(24)
         SectionTitle("Status")

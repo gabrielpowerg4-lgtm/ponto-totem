@@ -25,6 +25,7 @@ import br.com.pontototem.ui.EmployeesScreen
 import br.com.pontototem.ui.EnrollScreen
 import br.com.pontototem.ui.ErrorScreen
 import br.com.pontototem.ui.FaceTestScreen
+import br.com.pontototem.ui.FiscalScreen
 import br.com.pontototem.ui.SetupScreen
 import br.com.pontototem.ui.FaceScreen
 import br.com.pontototem.ui.HomeScreen
@@ -115,6 +116,7 @@ class MainActivity : ComponentActivity() {
                     Screen.RECEIPT -> ReceiptScreen(state)
                     Screen.ERROR -> ErrorScreen(state)
                     Screen.ADMIN_PIN -> AdminPinScreen(state)
+                    Screen.FISCAL -> FiscalScreen(state)
                     Screen.ADMIN -> AdminScreen(
                         state = state,
                         onKioskChanged = { on ->

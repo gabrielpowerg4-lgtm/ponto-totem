@@ -44,6 +44,21 @@ bloqueada por falta dele. O servidor também guarda o modelo do aparelho, a vers
 Android, a versão do app e um identificador da instalação, e registra em auditoria a
 troca de aparelho de um terminal.
 
+## Arquivos fiscais (AFD e AEJ)
+
+Na área administrativa, perfil administrador, em "Arquivos fiscais". Antes, cadastre os
+dados do empregador (CNPJ ou CPF, razão social, CNO da obra, endereço, CPF do responsável) e
+o horário contratual da obra. Os arquivos são gerados no servidor, por obra e período:
+
+- **AFD** (leiaute 003): cabeçalho, registros tipo 2 (empresa), tipo 5 (funcionários) e
+  tipo 7 (marcações), trailer e linha de assinatura. CRC-16 nos tipos 1 a 5 e hash SHA-256
+  encadeado no tipo 7, conferido na geração.
+- **AEJ** (leiaute 002): empregador, REP, vínculos, horário contratual, marcações em pares de
+  entrada e saída por dia e identificação do programa.
+
+Ainda faltam a assinatura digital (.p7s, depende do certificado ICP-Brasil), o número de
+registro no INPI e os dados do desenvolvedor. O AEJ não trata ausências nem banco de horas.
+
 ## Validação facial
 
 Depois da piscada (vivacidade), o app compara o rosto com a foto de referência do
