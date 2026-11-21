@@ -2,18 +2,42 @@
 // (fechamento do periodo e API para o Bubble). Funcoes puras, sem fuso: o banco ja entrega
 // cada marcacao como data local e minuto do dia.
 //
-// Regras:
+// Regras (modo SGI por padrao; modo CLT nos dias a partir de settings.clt_from):
 // - Marcacoes efetivas = originais nao desconsideradas + incluidas no tratamento.
 // - Jornada que passa da meia-noite: a primeira marcacao da madrugada (antes das 6h) vai para o
 //   dia anterior quando esse dia ficou com numero impar de marcacoes.
-// - Hora noturna das 22h as 5h, reduzida (52min30s): cada 7 min noturnos valem 8.
-// - Tolerancia (CLT art. 58, par. 1): variacoes de ate 5 min por marcacao, no maximo 10 min no dia,
-//   nao contam; passando disso, conta a diferenca inteira.
+// - Modo CLT: hora noturna das 22h as 5h reduzida (cada 7 min valem 8) e tolerancia do art. 58, par. 1
+//   (ate 5 min por marcacao, no maximo 10 no dia). Modo SGI: sem reducao noturna; saldo do dia entre
+//   -tol_sgi e +tol_sgi vira zero (RN04), exceto com abono de horas ou compensacao nao aplicavel.
+// - Bonus (RN10): bonus_minutes a cada bonus_every minutos cheios de extra, fora de sabado, domingo e
+//   feriado; o tratamento pode retirar. Saldo do banco = saldo + bonus (RN11).
+// - Percentual (RN02/RN07): indicativo de pagamento por dia da semana ou feriado; vai junto do lote.
+// - Fora do contrato (antes da admissao, depois do desligamento): o dia nao conta.
 // - Ocorrencias: feriado, DSR, folga, ferias, atestado, afastamento e falta justificada abonam o dia;
 //   abono (ou atestado) com minutos abona parte; falta mantem a falta; folga compensatoria abona o
-//   dia e desconta o banco de horas.
+//   dia e desconta o banco de horas; compensacao nao aplicavel (feriado) soma comp_holiday_minutes;
+//   ferias, atestado do dia, afastamento, falta justificada, desconto em folha e troca de feriado
+//   zeram o saldo do dia (RN08).
 
-export type Settings = { hour_bank: boolean; tol_mark: number; tol_day: number; closing_day: number };
+export type Settings = {
+  hour_bank: boolean;
+  tol_mark: number;
+  tol_day: number;
+  closing_day: number;
+  /** Dia a partir do qual valem as regras da CLT (hora noturna e tolerancia por marcacao). */
+  clt_from?: string | null;
+  tol_sgi?: number;
+  bonus_every?: number;
+  bonus_minutes?: number;
+  /** Percentual por dia da semana, domingo = 0. */
+  pct_weekday?: number[];
+  pct_holiday?: number;
+  comp_holiday_minutes?: number;
+};
+export type BonusRemoval = { id: string; cpf: string; date: string; reason: string; by: string; at: string };
+export type Attachment = {
+  id: string; cpf: string; date: string; path: string; name: string; size: number; mime: string; by: string; at: string;
+};
 export type Schedule = { id: string; code: string; name: string; days: string[][] };
 export type Assignment = { schedule_id: string; valid_from: string };
 export type EmployeeData = {
@@ -22,6 +46,8 @@ export type EmployeeData = {
   active: boolean;
   assignments: Assignment[];
   bank_before: number;
+  admitted_on?: string | null;
+  dismissed_on?: string | null;
 };
 export type MarkData = {
   cpf: string;
@@ -57,6 +83,8 @@ export type TimesheetData = {
   marks: MarkData[];
   occurrences: Occurrence[];
   closed: { start: string; end: string; closed_at: string }[];
+  bonus_removals?: BonusRemoval[];
+  attachments?: Attachment[];
   /** Data de hoje (AAAA-MM-DD). Dias depois dela nao contam como falta nem entram no saldo. */
   today?: string;
 };
@@ -84,6 +112,15 @@ export type Day = {
   flags: string[];
   closed: boolean;
   future: boolean;
+  mode: "sgi" | "clt";
+  holiday: boolean;
+  /** Bonus calculado antes de uma eventual retirada. */
+  bonus_gross: number;
+  bonus: number;
+  bonus_removed: BonusRemoval | null;
+  pct: number;
+  outside_contract: boolean;
+  attachments: Attachment[];
 };
 
 export type Totals = {
@@ -92,6 +129,7 @@ export type Totals = {
   night: number;
   extra: number;
   missing: number;
+  bonus: number;
   bank_delta: number;
   bank_before: number;
   bank_after: number;
@@ -112,6 +150,7 @@ export const FLAG_LABEL: Record<string, string> = {
   descanso_trabalhado: "Trabalho em dia de descanso",
   falta: "Falta",
   ajustado: "Tratado",
+  fora_contrato: "Fora do contrato",
 };
 
 export const OCCURRENCE_LABEL: Record<string, string> = {
@@ -125,9 +164,17 @@ export const OCCURRENCE_LABEL: Record<string, string> = {
   abono: "Abono de horas",
   falta: "Falta não justificada",
   folga_compensatoria: "Folga compensatória (banco)",
+  comp_feriado: "Compensação não aplicável (feriado)",
+  desconto_folha: "Desconto em folha",
+  troca_feriado: "Troca de feriado",
 };
 
-const FULL_DAY = new Set(["feriado", "dsr", "folga", "ferias", "atestado", "afastamento", "falta_justificada"]);
+const FULL_DAY = new Set([
+  "feriado", "dsr", "folga", "ferias", "atestado", "afastamento", "falta_justificada", "desconto_folha", "troca_feriado",
+]);
+/** Dias sem trabalho (RN08): o saldo do dia e zerado mesmo com marcacoes. */
+const ZERO_DAY = new Set(["ferias", "afastamento", "falta_justificada", "desconto_folha", "troca_feriado"]);
+const PCT_DEFAULT = [100, 60, 60, 60, 60, 60, 100];
 const FACE_OK = new Set(["ROSTO_CONFERE", "VIVACIDADE_OK"]);
 
 // ---------------------------------------------------------------------------
@@ -229,14 +276,18 @@ export function computeEmployee(data: TimesheetData, emp: EmployeeData): Sheet {
   }
 
   const days: Day[] = [];
+  const removals = (data.bonus_removals ?? []).filter((b) => b.cpf === emp.cpf);
+  const files = (data.attachments ?? []).filter((a) => a.cpf === emp.cpf);
   for (const date of dateRange(data.from, data.to)) {
     const wd = weekday(date);
+    const clt = !!s.clt_from && date >= s.clt_from;
+    const outside = (!!emp.admitted_on && date < emp.admitted_on) || (!!emp.dismissed_on && date > emp.dismissed_on);
     const sch = scheduleFor(emp, schedules, date);
     const times = sch ? (sch.days[wd] ?? []) : [];
     const exp = unwrap(times);
     let expectedBase = 0;
     for (let i = 0; i + 1 < exp.length; i += 2) {
-      expectedBase += exp[i + 1] - exp[i] + Math.round(nightOverlap(exp[i], exp[i + 1]) / 7);
+      expectedBase += exp[i + 1] - exp[i] + (clt ? Math.round(nightOverlap(exp[i], exp[i + 1]) / 7) : 0);
     }
 
     const occ = data.occurrences.filter((o) =>
@@ -245,14 +296,23 @@ export function computeEmployee(data: TimesheetData, emp: EmployeeData): Sheet {
     let expected = expectedBase;
     let bankExtra = 0;
     let fullDay = false;
+    let zeroDay = false;
     let falta = false;
+    let adjusted = false;
+    let compHoliday = 0;
+    const holiday = occ.some((o) => o.type === "feriado");
     for (const o of occ) {
-      if (o.type === "folga_compensatoria") {
+      if (ZERO_DAY.has(o.type) || (o.type === "atestado" && !o.minutes)) zeroDay = true;
+      if (o.type === "comp_feriado") {
+        compHoliday += s.comp_holiday_minutes ?? 60;
+        adjusted = true;
+      } else if (o.type === "folga_compensatoria") {
         bankExtra -= expectedBase;
         expected = 0;
         fullDay = true;
       } else if ((o.type === "abono" || o.type === "atestado") && o.minutes) {
         expected = Math.max(0, expected - o.minutes);
+        adjusted = true;
       } else if (FULL_DAY.has(o.type)) {
         expected = 0;
         fullDay = true;
@@ -271,13 +331,17 @@ export function computeEmployee(data: TimesheetData, emp: EmployeeData): Sheet {
       workedReal += b - a;
       night += nightOverlap(a, b);
     }
-    const worked = workedReal + Math.round(night / 7);
+    const worked = workedReal + (clt ? Math.round(night / 7) : 0);
 
     const future = !!data.today && date > data.today;
     const flags: string[] = [];
-    if (!sch && !future) flags.push("sem_jornada");
-    if (eff.length % 2 === 1) flags.push("impar");
-    if (expected > 0 && eff.length === 0 && !falta && !future) flags.push("sem_marcacao");
+    if (outside) {
+      flags.push("fora_contrato");
+      if (eff.length % 2 === 1) flags.push("impar");
+    }
+    if (!outside && !sch && !future) flags.push("sem_jornada");
+    if (!outside && eff.length % 2 === 1) flags.push("impar");
+    if (!outside && expected > 0 && eff.length === 0 && !falta && !future) flags.push("sem_marcacao");
     if (falta) flags.push("falta");
     if (eff.some((m) => m.kind === "O" && m.face && !FACE_OK.has(m.face))) flags.push("rosto");
     if (eff.some((m) => m.kind === "O" && m.online === false)) flags.push("offline");
@@ -286,19 +350,39 @@ export function computeEmployee(data: TimesheetData, emp: EmployeeData): Sheet {
     }
     if (marks.some((m) => m.kind === "I" || m.disregard) || occ.some((o) => o.cpf !== null)) flags.push("ajustado");
 
-    // Tolerancia: mesmo numero de marcacoes que a jornada, cada uma ate tol_mark e no total ate tol_day.
     let tolerance = false;
     let balance = future && eff.length === 0 ? 0 : worked - expected;
-    if (!fullDay && expected === expectedBase && exp.length > 0 && eff.length === exp.length) {
-      const dev = eff.map((m, i) => Math.abs(m.at_min - exp[i]));
-      const total = dev.reduce((x, y) => x + y, 0);
-      if (dev.every((x) => x <= s.tol_mark) && total <= s.tol_day && night === 0) {
-        tolerance = true;
-        balance = 0;
+    if (clt) {
+      // CLT: mesmo numero de marcacoes que a jornada, cada uma ate tol_mark e no total ate tol_day.
+      if (!fullDay && expected === expectedBase && exp.length > 0 && eff.length === exp.length) {
+        const dev = eff.map((m, i) => Math.abs(m.at_min - exp[i]));
+        const total = dev.reduce((x, y) => x + y, 0);
+        if (dev.every((x) => x <= s.tol_mark) && total <= s.tol_day && night === 0) {
+          tolerance = true;
+          balance = 0;
+        }
       }
+    } else if (!fullDay && !adjusted && balance !== 0 && Math.abs(balance) <= (s.tol_sgi ?? 5)) {
+      tolerance = true;
+      balance = 0;
+    }
+    balance += compHoliday;
+    if (zeroDay) balance = 0;
+    if (outside) {
+      expected = 0;
+      balance = 0;
+      bankExtra = 0;
     }
 
-    const bankDelta = s.hour_bank ? balance + bankExtra : 0;
+    const every = s.bonus_every ?? 60;
+    const bonusGross = s.hour_bank && !holiday && !zeroDay && wd !== 0 && wd !== 6 && balance >= every
+      ? Math.floor(balance / every) * (s.bonus_minutes ?? 30)
+      : 0;
+    const removed = removals.find((b) => b.date === date) ?? null;
+    const bonus = removed ? 0 : bonusGross;
+    const pct = holiday ? (s.pct_holiday ?? 100) : (s.pct_weekday ?? PCT_DEFAULT)[wd] ?? PCT_DEFAULT[wd];
+
+    const bankDelta = s.hour_bank ? balance + bankExtra + bonus : 0;
     days.push({
       cpf: emp.cpf,
       date,
@@ -320,6 +404,14 @@ export function computeEmployee(data: TimesheetData, emp: EmployeeData): Sheet {
       flags,
       closed: data.closed.some((c) => c.start <= date && c.end >= date),
       future,
+      mode: clt ? "clt" : "sgi",
+      holiday,
+      bonus_gross: bonusGross,
+      bonus,
+      bonus_removed: removed,
+      pct,
+      outside_contract: outside,
+      attachments: files.filter((a) => a.date === date),
     });
   }
 
@@ -333,6 +425,7 @@ export function computeEmployee(data: TimesheetData, emp: EmployeeData): Sheet {
     schedule_missing: days.some((d) => d.flags.includes("sem_jornada")),
     totals: {
       expected: sum((d) => (d.future ? 0 : d.expected)),
+      bonus: sum((d) => d.bonus),
       worked: sum((d) => d.worked),
       night: sum((d) => d.night),
       extra: sum((d) => d.extra),
@@ -364,6 +457,13 @@ export function closingRow(d: Day) {
     extra: d.extra,
     missing: d.missing,
     bank_delta: d.bank_delta,
+    bonus: d.bonus,
+    bonus_gross: d.bonus_gross,
+    bonus_removed: d.bonus_removed ? { reason: d.bonus_removed.reason, by: d.bonus_removed.by } : null,
+    pct: d.pct,
+    mode: d.mode,
+    holiday: d.holiday,
+    outside_contract: d.outside_contract,
     tolerance: d.tolerance,
     flags: d.flags,
     marks: d.marks.map((m) => ({

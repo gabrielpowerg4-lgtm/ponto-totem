@@ -6,7 +6,8 @@ import Punches from "./pages/Punches";
 import { Employees, Sites, Terminals } from "./pages/Registers";
 import { Account, CompanyPage, RulesPage, Users } from "./pages/Admin";
 import Schedules, { Holidays } from "./pages/Schedules";
-import { Audit, HourBank } from "./pages/Reports";
+import { Audit } from "./pages/Reports";
+import { HourBank, Monthly, Opening, Settlements } from "./pages/Bank";
 import Treatment from "./pages/Treatment";
 import Closing from "./pages/Closing";
 
@@ -188,7 +189,8 @@ function Auth({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void })
 // Portal
 // ---------------------------------------------------------------------------
 
-type Page = "home" | "punches" | "treatment" | "pending" | "closing" | "bank" | "mirror" | "afd" | "aej" |
+type Page = "home" | "punches" | "treatment" | "pending" | "closing" | "bank" | "settlements" | "monthly" |
+  "opening" | "mirror" | "afd" | "aej" |
   "report" | "audit" | "employees" | "schedules" | "holidays" | "sites" | "terminals" | "company" | "rules" |
   "users" | "integration" | "account";
 
@@ -201,7 +203,12 @@ const GROUPS: Group[] = [
     { page: "treatment", label: "Tratamento" },
     { page: "pending", label: "Pendências" },
     { page: "closing", label: "Fechamento" },
-    { page: "bank", label: "Banco de horas" },
+  ] },
+  { id: "banco", label: "Banco de horas", items: [
+    { page: "bank", label: "Saldos e extrato" },
+    { page: "settlements", label: "Quitação" },
+    { page: "monthly", label: "Consolidado mensal" },
+    { page: "opening", label: "Saldo de abertura", admin: true },
   ] },
   { id: "relatorios", label: "Relatórios e arquivos", items: [
     { page: "mirror", label: "Espelho de Ponto", soon: true },
@@ -256,9 +263,13 @@ function Portal({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void 
       })
       .catch(() => setDenied(true));
 
+  const [, setHashTick] = useState(0);
   useEffect(() => {
     loadMe();
-    const onHash = () => setPageState(pageFromHash());
+    const onHash = () => {
+      setPageState(pageFromHash());
+      setHashTick((n) => n + 1);
+    };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
@@ -368,7 +379,10 @@ function Portal({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void 
           {current === "report" && (
             <Closing mode="report" me={me} openTreatment={(cpf, start) => go("treatment", `cpf=${cpf}&start=${start}`)} />
           )}
-          {current === "bank" && <HourBank />}
+          {current === "bank" && <HourBank key={window.location.hash} />}
+          {current === "settlements" && <Settlements me={me} goAccount={() => go("account")} />}
+          {current === "monthly" && <Monthly />}
+          {current === "opening" && <Opening />}
           {current === "audit" && <Audit />}
           {current === "employees" && <Employees />}
           {current === "schedules" && <Schedules me={me} />}

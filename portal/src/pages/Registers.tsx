@@ -15,6 +15,19 @@ export function Employees() {
   const [editing, setEditing] = useState<{ cpf: string; schedule: string; from: string } | null>(null);
   const [saveError, setSaveError] = useState("");
   const [bulk, setBulk] = useState<{ schedule: string; from: string } | null>(null);
+  const [dates, setDates] = useState<{ cpf: string; admitted_on: string; dismissed_on: string } | null>(null);
+
+  const saveDates = async () => {
+    if (!dates) return;
+    setSaveError("");
+    try {
+      await rpc("portal_employee_dates", { p: dates });
+      setDates(null);
+      reload();
+    } catch (e) {
+      setSaveError(errorText(e));
+    }
+  };
 
   const saveSchedule = async () => {
     if (!editing) return;
@@ -128,6 +141,7 @@ export function Employees() {
                   <th>CPF</th>
                   <th>Obras</th>
                   <th>Jornada</th>
+                  <th>Contrato</th>
                   <th>Senha de ponto</th>
                   <th>Última marcação</th>
                   <th>Situação</th>
@@ -164,6 +178,24 @@ export function Employees() {
                       ) : (
                         <button className="link" onClick={() => setEditing({ cpf: e.cpf, schedule: e.schedule?.id ?? "", from: todayIso() })}>
                           {e.schedule ? e.schedule.code : "Definir"}
+                        </button>
+                      )}
+                    </td>
+                    <td className="nowrap small">
+                      {dates?.cpf === e.cpf ? (
+                        <div className="row">
+                          <input className="compact" type="date" value={dates.admitted_on} title="Admissão"
+                            onChange={(x) => setDates({ ...dates, admitted_on: x.target.value })} />
+                          <input className="compact" type="date" value={dates.dismissed_on} title="Desligamento"
+                            onChange={(x) => setDates({ ...dates, dismissed_on: x.target.value })} />
+                          <button className="primary small" onClick={saveDates}>Salvar</button>
+                          <button className="ghost small" onClick={() => setDates(null)}>Cancelar</button>
+                        </div>
+                      ) : (
+                        <button className="link" title="Dias fora do contrato não contam no ponto"
+                          onClick={() => setDates({ cpf: e.cpf, admitted_on: e.admitted_on ?? "", dismissed_on: e.dismissed_on ?? "" })}>
+                          {e.admitted_on ? `Desde ${br(e.admitted_on)}` : "Admissão"}
+                          {e.dismissed_on ? ` · até ${br(e.dismissed_on)}` : ""}
                         </button>
                       )}
                     </td>

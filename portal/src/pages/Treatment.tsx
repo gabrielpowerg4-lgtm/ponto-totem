@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  br, errorText, FACE_LABEL, formatCpf, rpc, todayIso, WEEKDAY, type Employee, type Me, type Period,
+  br, errorText, FACE_LABEL, formatCpf, rpc, supabase, todayIso, WEEKDAY, type Employee, type Me, type Period,
 } from "../api";
 import {
   ALERTS, computeEmployee, FLAG_LABEL, fmtClock, fmtMin, OCCURRENCE_LABEL, type Day, type DayMark,
@@ -172,7 +172,7 @@ export default function Treatment({ me, goAccount }: { me: Me; goAccount: () => 
           <div className="stats six">
             <Total label="Previsto" value={sheet.totals.expected} />
             <Total label="Trabalhado" value={sheet.totals.worked} note={sheet.totals.night ? `${fmtMin(sheet.totals.night)} noturnas` : undefined} />
-            <Total label="Extras" value={sheet.totals.extra} />
+            <Total label="Extras" value={sheet.totals.extra} note={sheet.totals.bonus ? `+ ${fmtMin(sheet.totals.bonus)} de bônus` : undefined} />
             <Total label="Atrasos e faltas" value={sheet.totals.missing} />
             <Total label="Banco anterior" value={sheet.totals.bank_before} signed />
             <Total label="Banco final" value={sheet.totals.bank_after} signed note={`Movimento ${fmtMin(sheet.totals.bank_delta, true)}`} />
@@ -196,13 +196,14 @@ export default function Treatment({ me, goAccount }: { me: Me; goAccount: () => 
                     <th className="num">Previsto</th>
                     <th className="num">Trabalhado</th>
                     <th className="num">Saldo</th>
+                    <th className="num">Bônus</th>
                     <th>Alertas</th>
                     <th />
                   </tr>
                 </thead>
                 <tbody>
                   {days.length === 0 && (
-                    <tr><td colSpan={8}><Empty>Nenhum dia com alerta.</Empty></td></tr>
+                    <tr><td colSpan={9}><Empty>Nenhum dia com alerta.</Empty></td></tr>
                   )}
                   {days.map((d) => (
                     <DayRows
@@ -211,6 +212,7 @@ export default function Treatment({ me, goAccount }: { me: Me; goAccount: () => 
                       open={open === d.date}
                       toggle={() => setOpen(open === d.date ? "" : d.date)}
                       readOnly={closed || d.closed || needsCpf}
+                      companyId={me.company_id}
                       onChanged={load}
                     />
                   ))}
@@ -249,11 +251,12 @@ function MarkChip({ m }: { m: DayMark }) {
   );
 }
 
-function DayRows({ day, open, toggle, readOnly, onChanged }: {
+function DayRows({ day, open, toggle, readOnly, companyId, onChanged }: {
   day: Day;
   open: boolean;
   toggle: () => void;
   readOnly: boolean;
+  companyId: string;
   onChanged: () => void;
 }) {
   const alerts = day.flags.filter((f) => f !== "ajustado");
@@ -272,6 +275,7 @@ function DayRows({ day, open, toggle, readOnly, onChanged }: {
         <td>
           <div className="chips">
             {day.marks.map((m, i) => <MarkChip key={i} m={m} />)}
+            {day.attachments.length > 0 && <span className="chip" title="Anexos">📎 {day.attachments.length}</span>}
             {day.occurrences.map((o) => (
               <span key={o.id} className="chip occ" title={o.reason}>
                 {OCCURRENCE_LABEL[o.type] ?? o.type}{o.minutes ? ` ${fmtMin(o.minutes)}` : ""}
@@ -284,6 +288,11 @@ function DayRows({ day, open, toggle, readOnly, onChanged }: {
         <td className="num">
           <Hours value={day.balance} signed />
           {day.tolerance && <div className="muted small">tolerância</div>}
+        </td>
+        <td className="num">
+          {day.bonus_removed && day.bonus_gross
+            ? <span className="muted strike" title={`Retirado: ${day.bonus_removed.reason}`}>{fmtMin(day.bonus_gross)}</span>
+            : day.bonus ? <Hours value={day.bonus} signed /> : <span className="muted">–</span>}
         </td>
         <td>
           <div className="chips">
@@ -300,8 +309,8 @@ function DayRows({ day, open, toggle, readOnly, onChanged }: {
       </tr>
       {open && (
         <tr className="panel-row">
-          <td colSpan={8}>
-            <DayPanel day={day} readOnly={readOnly} onChanged={onChanged} />
+          <td colSpan={9}>
+            <DayPanel day={day} readOnly={readOnly} companyId={companyId} onChanged={onChanged} />
           </td>
         </tr>
       )}
@@ -311,7 +320,12 @@ function DayRows({ day, open, toggle, readOnly, onChanged }: {
 
 const PARTIAL = new Set(["abono", "atestado"]);
 
-function DayPanel({ day, readOnly, onChanged }: { day: Day; readOnly: boolean; onChanged: () => void }) {
+function DayPanel({ day, readOnly, companyId, onChanged }: {
+  day: Day;
+  readOnly: boolean;
+  companyId: string;
+  onChanged: () => void;
+}) {
   const [include, setInclude] = useState({ time: "", nextDay: false, reason: "" });
   const [occ, setOcc] = useState({ type: "atestado", to: day.date, minutes: "", reason: "" });
   const [busy, setBusy] = useState(false);
@@ -354,6 +368,37 @@ function DayPanel({ day, readOnly, onChanged }: { day: Day; readOnly: boolean; o
       await rpc("portal_mark_include", { p_cpf: day.cpf, p_local: `${date}T${include.time}`, p_reason: include.reason });
       setInclude({ time: "", nextDay: false, reason: "" });
     });
+  };
+
+  const toggleBonus = () => {
+    if (day.bonus_removed) {
+      const reason = ask("Motivo para devolver o bônus do dia:");
+      if (reason) run(() => rpc("portal_bonus_restore", { p: { id: day.bonus_removed!.id, reason } }));
+    } else {
+      const reason = ask(`Motivo para retirar o bônus de ${fmtMin(day.bonus_gross)} do dia:`);
+      if (reason) run(() => rpc("portal_bonus_remove", { p: { cpf: day.cpf, date: day.date, reason } }));
+    }
+  };
+
+  const upload = (file: File | undefined) => {
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) return setMsg("Arquivo maior que 5 MB.");
+    if (!["application/pdf", "image/jpeg", "image/png"].includes(file.type)) return setMsg("Envie PDF, JPG ou PNG.");
+    run(async () => {
+      const safe = file.name.normalize("NFD").replace(/[^\w.-]+/g, "_").slice(-80);
+      const path = `${companyId}/${day.cpf}/${day.date}/${crypto.randomUUID()}-${safe}`;
+      const up = await supabase.storage.from("anexos").upload(path, file, { contentType: file.type });
+      if (up.error) throw new Error("invalid_file");
+      await rpc("portal_attachment_add", {
+        p: { cpf: day.cpf, date: day.date, path, name: file.name, size: file.size, mime: file.type },
+      });
+    });
+  };
+
+  const openFile = async (path: string) => {
+    const { data, error } = await supabase.storage.from("anexos").createSignedUrl(path, 120);
+    if (error || !data) return setMsg("Não foi possível abrir o arquivo.");
+    window.open(data.signedUrl, "_blank", "noopener");
   };
 
   const addOcc = (e: React.FormEvent) => {
@@ -418,9 +463,54 @@ function DayPanel({ day, readOnly, onChanged }: { day: Day; readOnly: boolean; o
               </ul>
             </>
           )}
+          {(day.bonus_gross > 0 || day.bonus_removed) && (
+            <>
+              <h3>Bônus</h3>
+              <ul className="mark-list">
+                <li>
+                  <span className={day.bonus_removed ? "chip off" : "chip incl"}>{fmtMin(day.bonus_gross)}</span>
+                  <span className="small">
+                    {day.bonus_removed ? <>Retirado · {day.bonus_removed.reason}</> : "30 min a cada hora cheia de extra"}
+                  </span>
+                  {!readOnly && (
+                    <button className="link small" disabled={busy} onClick={toggleBonus}>
+                      {day.bonus_removed ? "Devolver bônus" : "Retirar bônus"}
+                    </button>
+                  )}
+                </li>
+              </ul>
+            </>
+          )}
+          <h3>Anexos</h3>
+          {day.attachments.length === 0 ? <p className="muted small">Nenhum anexo.</p> : (
+            <ul className="mark-list">
+              {day.attachments.map((a) => (
+                <li key={a.id}>
+                  <button className="link small" onClick={() => openFile(a.path)}>📎 {a.name}</button>
+                  <span className="muted small">{Math.ceil(a.size / 1024)} KB</span>
+                  {!readOnly && (
+                    <button className="link small" disabled={busy} onClick={() => {
+                      const reason = ask(`Motivo para retirar o anexo ${a.name}:`);
+                      if (reason) run(() => rpc("portal_attachment_revoke", { p: { id: a.id, reason } }));
+                    }}>
+                      Retirar
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+          {!readOnly && day.attachments.length < 3 && (
+            <label className="file small">
+              <input type="file" accept="application/pdf,image/jpeg,image/png" disabled={busy}
+                onChange={(e) => { upload(e.target.files?.[0]); e.target.value = ""; }} />
+              Anexar arquivo (PDF, JPG ou PNG, até 5 MB; máximo 3 por dia)
+            </label>
+          )}
           <p className="muted small">
-            Trabalhado {fmtMin(day.worked_real)} real{day.night ? `, ${fmtMin(day.night)} noturnas (hora reduzida)` : ""}.
-            {day.bank_delta ? ` Banco de horas: ${fmtMin(day.bank_delta, true)}.` : ""}
+            Regra {day.mode === "clt" ? "da CLT" : "do SGI"}. Trabalhado {fmtMin(day.worked_real)} real
+            {day.mode === "clt" && day.night ? `, ${fmtMin(day.night)} noturnas (hora reduzida)` : ""}.
+            {day.bank_delta ? ` Banco de horas: ${fmtMin(day.bank_delta, true)} (${day.pct}% se pago).` : ""}
           </p>
         </div>
 

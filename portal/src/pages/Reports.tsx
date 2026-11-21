@@ -98,6 +98,15 @@ const ACTION_LABEL: Record<string, string> = {
   tablet_senha_redefinida: "Senha de ponto redefinida no tablet",
   tablet_rosto_cadastrado: "Rosto cadastrado no tablet",
   tablet_rosto_refeito: "Rosto refeito no tablet",
+  bonus_retirado: "Bônus retirado",
+  bonus_devolvido: "Bônus devolvido",
+  anexo_incluido: "Anexo incluído",
+  anexo_retirado: "Anexo retirado",
+  contrato_datas: "Admissão e desligamento",
+  banco_pagamento: "Pagamento de horas",
+  banco_desconto: "Desconto de horas",
+  banco_estorno: "Quitação estornada",
+  banco_abertura: "Saldo de abertura",
 };
 
 /** Trilha de auditoria: quem fez o que, quando. */

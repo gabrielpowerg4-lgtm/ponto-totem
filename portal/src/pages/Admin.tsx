@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import {
-  createPortalUser, errorText, formatCpf, formatDateTime, formatEmployerId, rpc, supabase,
+  br, createPortalUser, errorText, formatCpf, formatDateTime, formatEmployerId, rpc, supabase, todayIso, WEEKDAY_FULL,
   type Company, type Employee, type Me, type PortalUser, type Role,
 } from "../api";
 import { Badge, Banner, Empty, Loading, PageHead, useLoad } from "../ui";
@@ -161,12 +161,23 @@ export function RulesPage({ me }: { me: Me }) {
 function Rules({ company, admin, onSaved }: { company: Company; admin: boolean; onSaved: (c: Company) => void }) {
   const [form, setForm] = useState({
     closing_day: company.closing_day, hour_bank: company.hour_bank, tol_mark: company.tol_mark, tol_day: company.tol_day,
+    clt_from: company.clt_from ?? "", tol_sgi: company.tol_sgi, bonus_every: company.bonus_every,
+    bonus_minutes: company.bonus_minutes, pct_weekday: company.pct_weekday, pct_holiday: company.pct_holiday,
+    comp_holiday_minutes: company.comp_holiday_minutes, bank_expiry_months: company.bank_expiry_months,
+    bank_alert_days: company.bank_alert_days,
   });
   const [msg, setMsg] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const clt = form.clt_from !== "";
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (form.clt_from !== (company.clt_from ?? "")) {
+      const text = form.clt_from
+        ? `Os dias a partir de ${br(form.clt_from)} passam a ser calculados pelas regras da CLT (hora noturna reduzida e tolerância por marcação). Confirmar?`
+        : "Voltar a calcular pelas regras do SGI? Só é possível se nenhum período com as regras da CLT foi fechado.";
+      if (!window.confirm(text)) return;
+    }
     setBusy(true);
     setMsg(null);
     try {
@@ -178,9 +189,12 @@ function Rules({ company, admin, onSaved }: { company: Company; admin: boolean; 
     setBusy(false);
   };
 
+  const num = (key: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) =>
+    setForm({ ...form, [key]: Number(e.target.value) });
   const cut = form.closing_day;
   return (
     <form className="card form" onSubmit={save}>
+      <h2>Período e banco</h2>
       <div className="grid-2">
         <label>
           Período de apuração
@@ -202,15 +216,90 @@ function Rules({ company, admin, onSaved }: { company: Company; admin: boolean; 
       </div>
       <div className="grid-2">
         <label>
-          Tolerância por marcação (minutos)
-          <input disabled={!admin} type="number" min={0} max={5} value={form.tol_mark}
-            onChange={(e) => setForm({ ...form, tol_mark: Number(e.target.value) })} />
+          Vencimento do banco (meses)
+          <input disabled={!admin} type="number" min={1} max={60} value={form.bank_expiry_months} onChange={num("bank_expiry_months")} />
+          <span className="hint">Cada lote vence na sua data mais este prazo. Acima de 6 meses exige acordo ou convenção coletiva (CLT art. 59).</span>
         </label>
         <label>
-          Tolerância por dia (minutos)
-          <input disabled={!admin} type="number" min={0} max={10} value={form.tol_day}
-            onChange={(e) => setForm({ ...form, tol_day: Number(e.target.value) })} />
-          <span className="hint">CLT art. 58: até 5 por marcação e 10 por dia.</span>
+          Alerta antes do vencimento (dias)
+          <input disabled={!admin} type="number" min={0} max={180} value={form.bank_alert_days} onChange={num("bank_alert_days")} />
+        </label>
+      </div>
+
+      <h2>Regras de cálculo</h2>
+      <label className="check">
+        <input disabled={!admin} type="checkbox" checked={clt}
+          onChange={(e) => setForm({ ...form, clt_from: e.target.checked ? (company.clt_from ?? todayIso()) : "" })} />
+        Adotar as regras previstas na CLT
+      </label>
+      {clt ? (
+        <div className="grid-2">
+          <label>
+            A partir de
+            <input disabled={!admin} type="date" value={form.clt_from} onChange={(e) => setForm({ ...form, clt_from: e.target.value })} required />
+            <span className="hint">Os dias antes desta data continuam pela regra do SGI. Não pode cair num período já fechado.</span>
+          </label>
+          <p className="muted small">
+            CLT: hora noturna reduzida das 22h às 5h (art. 73) e tolerância por marcação, sem contar variações até o limite
+            por marcação e por dia (art. 58, § 1º).
+          </p>
+        </div>
+      ) : (
+        <p className="muted small">
+          Regra do SGI: sem hora noturna reduzida; o saldo do dia entre −{form.tol_sgi} e +{form.tol_sgi} min vira zero,
+          exceto com abono de horas ou compensação não aplicável.
+        </p>
+      )}
+      <div className="grid-3">
+        <label>
+          Tolerância do dia, regra SGI (min)
+          <input disabled={!admin} type="number" min={0} max={30} value={form.tol_sgi} onChange={num("tol_sgi")} />
+        </label>
+        <label>
+          Por marcação, regra CLT (min)
+          <input disabled={!admin} type="number" min={0} max={5} value={form.tol_mark} onChange={num("tol_mark")} />
+        </label>
+        <label>
+          Por dia, regra CLT (min)
+          <input disabled={!admin} type="number" min={0} max={10} value={form.tol_day} onChange={num("tol_day")} />
+        </label>
+      </div>
+
+      <h2>Bônus e compensação</h2>
+      <div className="grid-3">
+        <label>
+          Bônus de (min)
+          <input disabled={!admin} type="number" min={0} max={600} value={form.bonus_minutes} onChange={num("bonus_minutes")} />
+        </label>
+        <label>
+          A cada (min de extra no dia)
+          <input disabled={!admin} type="number" min={1} max={600} value={form.bonus_every} onChange={num("bonus_every")} />
+          <span className="hint">Fração descartada; sem bônus em sábado, domingo e feriado.</span>
+        </label>
+        <label>
+          Compensação não aplicável (min)
+          <input disabled={!admin} type="number" min={0} max={600} value={form.comp_holiday_minutes} onChange={num("comp_holiday_minutes")} />
+          <span className="hint">Somados ao dia com essa justificativa.</span>
+        </label>
+      </div>
+
+      <h2>Percentual de pagamento</h2>
+      <p className="muted small">Indica quanto se paga pela hora se ela vencer ou for quitada. Não muda o saldo do banco.</p>
+      <div className="grid-pct">
+        {WEEKDAY_FULL.map((d, i) => (
+          <label key={d}>
+            {d}
+            <input disabled={!admin} type="number" min={0} max={300} value={form.pct_weekday[i]}
+              onChange={(e) => {
+                const next = [...form.pct_weekday];
+                next[i] = Number(e.target.value);
+                setForm({ ...form, pct_weekday: next });
+              }} />
+          </label>
+        ))}
+        <label>
+          Feriado
+          <input disabled={!admin} type="number" min={0} max={300} value={form.pct_holiday} onChange={num("pct_holiday")} />
         </label>
       </div>
       {msg && <Banner tone={msg.tone}>{msg.text}</Banner>}

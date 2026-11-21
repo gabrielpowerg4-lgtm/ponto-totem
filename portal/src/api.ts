@@ -55,6 +55,15 @@ export type Company = {
   hour_bank: boolean;
   tol_mark: number;
   tol_day: number;
+  clt_from: string | null;
+  tol_sgi: number;
+  bonus_every: number;
+  bonus_minutes: number;
+  pct_weekday: number[];
+  pct_holiday: number;
+  comp_holiday_minutes: number;
+  bank_expiry_months: number;
+  bank_alert_days: number;
   inpi_number: string;
   dev_id: string;
   dev_name: string;
@@ -74,6 +83,8 @@ export type Employee = {
   schedule: { id: string; code: string; valid_from: string } | null;
   portal_role?: "" | "admin" | "rh";
   tablet_responsible?: boolean;
+  admitted_on?: string | null;
+  dismissed_on?: string | null;
   last_punch_at: string | null;
 };
 
@@ -159,7 +170,13 @@ const ERRORS: Record<string, string> = {
   period_not_finished: "O período ainda não terminou.",
   future_datetime: "Não é possível incluir marcação no futuro.",
   invalid_datetime: "Data ou hora inválida.",
-  already_done: "Esta marcação já está desconsiderada.",
+  already_done: "Isto já foi feito. Atualize a página.",
+  exceeds_balance: "As horas informadas passam do saldo em aberto do funcionário.",
+  invalid_kind: "Escolha pagamento ou desconto.",
+  attachment_limit: "O dia já tem 3 anexos.",
+  invalid_file: "Não foi possível enviar o arquivo (PDF, JPG ou PNG, até 5 MB).",
+  settled_after_close: "Houve pagamento ou desconto depois deste fechamento. Estorne-o antes de reabrir.",
+  clt_date_closed: "A data das regras da CLT não pode ficar dentro de um período já fechado.",
   invalid_code: "Código inválido: use letras, números, - ou _ (até 30).",
   duplicate_code: "Já existe uma jornada com este código.",
   invalid_schedule: "Horários inválidos: informe pares de entrada e saída em ordem (HH:MM).",

@@ -352,6 +352,20 @@ Deno.serve(async (req: Request) => {
             const last = results[results.length - 1] as Record<string, unknown>;
             results[results.length - 1] = { ...last, perfis: r.error ? { erro: "erro" } : r.data };
           }
+          // Contrato: admissao e desligamento (AAAA-MM-DD ou vazio para limpar).
+          const dates: Record<string, string> = {};
+          for (const k of ["admissao", "desligamento"]) {
+            if (item && k in item) {
+              const v = String(item[k] ?? "").trim();
+              if (v !== "" && !/^\d{4}-\d{2}-\d{2}$/.test(v)) continue;
+              dates[k] = v;
+            }
+          }
+          if (Object.keys(dates).length > 0 && data?.operacao !== "erro") {
+            const r = await db.rpc("rep_int_set_dates", { p_key_hash: tokenHash, p_cpf: String(item?.cpf ?? ""), p_item: dates });
+            const last = results[results.length - 1] as Record<string, unknown>;
+            results[results.length - 1] = { ...last, contrato: r.error ? "erro" : "ok" };
+          }
         }
         return json(200, many ? { resultados: results } : results[0]);
       }
