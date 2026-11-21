@@ -130,6 +130,8 @@ export function CompanyPage({ me, goAccount }: { me: Me; goAccount: () => void }
         )}
       </form>
 
+      <Rules company={data} admin={admin} onSaved={setData} />
+
       <section className="card soft">
         <h2>Dados do REP-P</h2>
         <dl className="facts">
@@ -144,6 +146,68 @@ export function CompanyPage({ me, goAccount }: { me: Me; goAccount: () => void }
         </dl>
       </section>
     </>
+  );
+}
+
+function Rules({ company, admin, onSaved }: { company: Company; admin: boolean; onSaved: (c: Company) => void }) {
+  const [form, setForm] = useState({
+    closing_day: company.closing_day, hour_bank: company.hour_bank, tol_mark: company.tol_mark, tol_day: company.tol_day,
+  });
+  const [msg, setMsg] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setMsg(null);
+    try {
+      onSaved(await rpc<Company>("portal_rules_set", { p: form }));
+      setMsg({ tone: "ok", text: "Regras salvas." });
+    } catch (err) {
+      setMsg({ tone: "error", text: errorText(err) });
+    }
+    setBusy(false);
+  };
+
+  const cut = form.closing_day;
+  return (
+    <form className="card form" onSubmit={save}>
+      <h2>Regras de apuração</h2>
+      <div className="grid-2">
+        <label>
+          Período de apuração
+          <select disabled={!admin} value={cut} onChange={(e) => setForm({ ...form, closing_day: Number(e.target.value) })}>
+            <option value={0}>Mês calendário (dia 1 ao último dia)</option>
+            {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => (
+              <option key={d} value={d}>Dia {d + 1} a dia {d} do mês seguinte</option>
+            ))}
+          </select>
+          <span className="hint">Mude antes de fechar o primeiro período.</span>
+        </label>
+        <label>
+          Banco de horas
+          <select disabled={!admin} value={form.hour_bank ? "1" : "0"} onChange={(e) => setForm({ ...form, hour_bank: e.target.value === "1" })}>
+            <option value="1">Sim: saldo do dia vai para o banco</option>
+            <option value="0">Não: extras e faltas apurados no período</option>
+          </select>
+        </label>
+      </div>
+      <div className="grid-2">
+        <label>
+          Tolerância por marcação (minutos)
+          <input disabled={!admin} type="number" min={0} max={5} value={form.tol_mark}
+            onChange={(e) => setForm({ ...form, tol_mark: Number(e.target.value) })} />
+        </label>
+        <label>
+          Tolerância por dia (minutos)
+          <input disabled={!admin} type="number" min={0} max={10} value={form.tol_day}
+            onChange={(e) => setForm({ ...form, tol_day: Number(e.target.value) })} />
+          <span className="hint">CLT art. 58: até 5 por marcação e 10 por dia.</span>
+        </label>
+      </div>
+      {msg && <Banner tone={msg.tone}>{msg.text}</Banner>}
+      {admin && <button className="primary" disabled={busy} type="submit">{busy ? "Salvando" : "Salvar regras"}</button>}
+    </form>
   );
 }
 

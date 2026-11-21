@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import {
-  errorText, formatCpf, formatDateTime, rpc, type Employee, type Me, type Site, type Terminal,
+  br, errorText, formatCpf, formatDateTime, rpc, todayIso, type Employee, type Me, type ScheduleRow, type Site,
+  type Terminal,
 } from "../api";
 import { Badge, Banner, Empty, Loading, PageHead, useLoad } from "../ui";
 
@@ -9,7 +10,38 @@ import { Badge, Banner, Empty, Loading, PageHead, useLoad } from "../ui";
 // ---------------------------------------------------------------------------
 
 export function Employees() {
-  const { data, error } = useLoad(() => rpc<Employee[]>("portal_employees"));
+  const { data, error, reload } = useLoad(() => rpc<Employee[]>("portal_employees"));
+  const { data: schedules } = useLoad(() => rpc<ScheduleRow[]>("portal_schedules"));
+  const [editing, setEditing] = useState<{ cpf: string; schedule: string; from: string } | null>(null);
+  const [saveError, setSaveError] = useState("");
+  const [bulk, setBulk] = useState<{ schedule: string; from: string } | null>(null);
+
+  const saveSchedule = async () => {
+    if (!editing) return;
+    setSaveError("");
+    try {
+      await rpc("portal_employee_schedule", { p_cpf: editing.cpf, p_schedule: editing.schedule, p_from: editing.from });
+      setEditing(null);
+      reload();
+    } catch (e) {
+      setSaveError(errorText(e));
+    }
+  };
+
+  const applyBulk = async (targets: Employee[]) => {
+    if (!bulk || !bulk.schedule) return;
+    if (!window.confirm(`Definir esta jornada para ${targets.length} funcionário(s) sem jornada, a partir de ${br(bulk.from)}?`)) return;
+    setSaveError("");
+    try {
+      for (const e of targets) {
+        await rpc("portal_employee_schedule", { p_cpf: e.cpf, p_schedule: bulk.schedule, p_from: bulk.from });
+      }
+      setBulk(null);
+      reload();
+    } catch (e) {
+      setSaveError(errorText(e));
+    }
+  };
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<"active" | "inactive" | "all">("active");
 
@@ -27,16 +59,44 @@ export function Employees() {
 
   const counts = useMemo(() => {
     const all = data ?? [];
-    return { active: all.filter((e) => e.active).length, noPin: all.filter((e) => e.active && !e.has_pin).length };
+    return {
+      active: all.filter((e) => e.active).length,
+      noPin: all.filter((e) => e.active && !e.has_pin).length,
+      noSchedule: all.filter((e) => e.active && !e.schedule),
+    };
   }, [data]);
+  const activeSchedules = (schedules ?? []).filter((s) => s.active);
 
   return (
     <>
       <PageHead
         title="Funcionários"
-        lead="O cadastro é feito no Bubble e chega aqui pela integração. Esta tela é só para consulta."
+        lead="O cadastro é feito no Bubble e chega aqui pela integração. Aqui você define a jornada de cada um (o Bubble também pode enviá-la)."
       />
-      {error && <Banner tone="error">{error}</Banner>}
+      {(error || saveError) && <Banner tone="error">{error || saveError}</Banner>}
+      {counts.noSchedule.length > 0 && activeSchedules.length > 0 && (
+        <div className="card soft">
+          <div className="row">
+            <span className="small"><span className="strong">{counts.noSchedule.length}</span> funcionários ativos sem jornada.</span>
+            {!bulk ? (
+              <button className="ghost small" onClick={() => setBulk({ schedule: "", from: todayIso().slice(0, 8) + "01" })}>
+                Definir uma jornada para todos eles
+              </button>
+            ) : (
+              <>
+                <select className="compact" value={bulk.schedule} onChange={(e) => setBulk({ ...bulk, schedule: e.target.value })}>
+                  <option value="">Escolha a jornada</option>
+                  {activeSchedules.map((s) => <option key={s.id} value={s.id}>{s.code}</option>)}
+                </select>
+                <span className="small muted">a partir de</span>
+                <input className="compact" type="date" value={bulk.from} onChange={(e) => setBulk({ ...bulk, from: e.target.value })} />
+                <button className="primary small" disabled={!bulk.schedule} onClick={() => applyBulk(counts.noSchedule)}>Aplicar</button>
+                <button className="ghost small" onClick={() => setBulk(null)}>Cancelar</button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
       <div className="toolbar">
         <input
           className="search"
@@ -54,7 +114,8 @@ export function Employees() {
       </div>
       {data && (
         <p className="muted small">
-          {counts.active} ativos{counts.noPin > 0 ? ` · ${counts.noPin} sem senha de ponto` : ""} · mostrando {list.length}
+          {counts.active} ativos{counts.noPin > 0 ? ` · ${counts.noPin} sem senha de ponto` : ""}
+          {counts.noSchedule.length > 0 ? ` · ${counts.noSchedule.length} sem jornada` : ""} · mostrando {list.length}
         </p>
       )}
       <section className="card flush">
@@ -66,6 +127,7 @@ export function Employees() {
                   <th>Nome</th>
                   <th>CPF</th>
                   <th>Obras</th>
+                  <th>Jornada</th>
                   <th>Senha de ponto</th>
                   <th>Última marcação</th>
                   <th>Situação</th>
@@ -80,6 +142,24 @@ export function Employees() {
                     </td>
                     <td className="nowrap">{formatCpf(e.cpf)}</td>
                     <td>{e.sites.length ? e.sites.join(", ") : <span className="muted">Todas</span>}</td>
+                    <td className="nowrap">
+                      {editing?.cpf === e.cpf ? (
+                        <div className="row">
+                          <select className="compact" value={editing.schedule} onChange={(x) => setEditing({ ...editing, schedule: x.target.value })}>
+                            <option value="">Escolha</option>
+                            {activeSchedules.map((s) => <option key={s.id} value={s.id}>{s.code}</option>)}
+                          </select>
+                          <input className="compact" type="date" value={editing.from} title="Vale a partir de"
+                            onChange={(x) => setEditing({ ...editing, from: x.target.value })} />
+                          <button className="primary small" disabled={!editing.schedule} onClick={saveSchedule}>Salvar</button>
+                          <button className="ghost small" onClick={() => setEditing(null)}>Cancelar</button>
+                        </div>
+                      ) : (
+                        <button className="link" onClick={() => setEditing({ cpf: e.cpf, schedule: e.schedule?.id ?? "", from: todayIso() })}>
+                          {e.schedule ? e.schedule.code : "Definir"}
+                        </button>
+                      )}
+                    </td>
                     <td>{e.has_pin ? <Badge tone="ok">Cadastrada</Badge> : <Badge tone="warn">Sem senha</Badge>}</td>
                     <td className="nowrap">{e.last_punch_at ? formatDateTime(e.last_punch_at) : <span className="muted">Nenhuma</span>}</td>
                     <td>{e.active ? <Badge tone="ok">Ativo</Badge> : <Badge tone="neutral">Desligado</Badge>}</td>

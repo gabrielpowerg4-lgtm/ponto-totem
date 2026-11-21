@@ -5,6 +5,9 @@ import { PageHead, Stat } from "./ui";
 import Punches from "./pages/Punches";
 import { Employees, Sites, Terminals } from "./pages/Registers";
 import { Account, CompanyPage, Users } from "./pages/Admin";
+import Schedules from "./pages/Schedules";
+import Treatment from "./pages/Treatment";
+import Closing from "./pages/Closing";
 
 type Theme = "light" | "dark";
 
@@ -173,12 +176,16 @@ function Auth({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void })
 // Portal
 // ---------------------------------------------------------------------------
 
-type Page = "home" | "punches" | "employees" | "sites" | "terminals" | "company" | "users" | "integration" | "account";
+type Page = "home" | "punches" | "treatment" | "closing" | "employees" | "schedules" | "sites" | "terminals" |
+  "company" | "users" | "integration" | "account";
 
 const MENU: { page: Page; label: string; admin?: boolean; group: string }[] = [
   { page: "home", label: "Início", group: "Ponto" },
   { page: "punches", label: "Marcações", group: "Ponto" },
+  { page: "treatment", label: "Tratamento", group: "Ponto" },
+  { page: "closing", label: "Fechamento", group: "Ponto" },
   { page: "employees", label: "Funcionários", group: "Cadastros" },
+  { page: "schedules", label: "Jornadas e feriados", group: "Cadastros" },
   { page: "sites", label: "Obras", group: "Cadastros" },
   { page: "terminals", label: "Tablets", group: "Cadastros" },
   { page: "company", label: "Empresa", group: "Configurações" },
@@ -188,7 +195,7 @@ const MENU: { page: Page; label: string; admin?: boolean; group: string }[] = [
 ];
 
 function pageFromHash(): Page {
-  const h = window.location.hash.replace("#", "") as Page;
+  const h = window.location.hash.replace("#", "").split("?")[0] as Page;
   return MENU.some((m) => m.page === h) ? h : "home";
 }
 
@@ -214,8 +221,8 @@ function Portal({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void 
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  const go = (p: Page) => {
-    window.location.hash = p;
+  const go = (p: Page, query = "") => {
+    window.location.hash = p + (query ? `?${query}` : "");
     setPageState(p);
     setMenuOpen(false);
   };
@@ -274,7 +281,12 @@ function Portal({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void 
         <main>
           {current === "home" && <Home go={go} />}
           {current === "punches" && <Punches />}
+          {current === "treatment" && <Treatment me={me} goAccount={() => go("account")} />}
+          {current === "closing" && (
+            <Closing me={me} openTreatment={(cpf, start) => go("treatment", `cpf=${cpf}&start=${start}`)} />
+          )}
           {current === "employees" && <Employees />}
+          {current === "schedules" && <Schedules me={me} />}
           {current === "sites" && <Sites me={me} />}
           {current === "terminals" && <Terminals me={me} />}
           {current === "company" && <CompanyPage me={me} goAccount={() => go("account")} />}
@@ -349,8 +361,8 @@ function Home({ go }: { go: (p: Page) => void }) {
       <section className="card soft">
         <h2>Próximas etapas</h2>
         <p className="muted">
-          Tratamento das marcações e fechamento do período, depois Espelho de Ponto, AFD e AEJ, e a API para o
-          Bubble e o n8n buscarem a jornada tratada.
+          Espelho de Ponto, AFD e AEJ gerados no portal a partir do período fechado, e a API para o Bubble e o
+          n8n buscarem a jornada tratada.
         </p>
       </section>
     </>

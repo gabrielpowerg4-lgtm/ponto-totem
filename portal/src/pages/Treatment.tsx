@@ -1,0 +1,483 @@
+import { useEffect, useMemo, useState } from "react";
+import {
+  br, errorText, FACE_LABEL, formatCpf, rpc, WEEKDAY, type Employee, type Me, type Period,
+} from "../api";
+import {
+  ALERTS, computeEmployee, FLAG_LABEL, fmtClock, fmtMin, OCCURRENCE_LABEL, type Day, type DayMark,
+  type TimesheetData,
+} from "../jornada";
+import { Badge, Banner, Empty, Loading, PageHead } from "../ui";
+
+// ---------------------------------------------------------------------------
+// Periodos (compartilhado com a tela de fechamento)
+// ---------------------------------------------------------------------------
+
+export function hashParams(): URLSearchParams {
+  const h = window.location.hash;
+  const i = h.indexOf("?");
+  return new URLSearchParams(i >= 0 ? h.slice(i + 1) : "");
+}
+
+export function usePeriods() {
+  const [periods, setPeriods] = useState<Period[] | null>(null);
+  const [error, setError] = useState("");
+  const reload = () =>
+    rpc<Period[]>("portal_periods", { p_count: 12 })
+      .then(setPeriods)
+      .catch((e) => setError(errorText(e, "Não foi possível carregar os períodos.")));
+  useEffect(() => {
+    reload();
+  }, []);
+  return { periods, error, reload };
+}
+
+export function PeriodSelect({ periods, value, onChange }: {
+  periods: Period[];
+  value: string;
+  onChange: (start: string) => void;
+}) {
+  return (
+    <select value={value} onChange={(e) => onChange(e.target.value)}>
+      {periods.map((p) => (
+        <option key={p.start} value={p.start}>
+          {br(p.start)} a {br(p.end)}{p.current ? " (atual)" : ""}{p.closed ? " · fechado" : ""}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+export function Hours({ value, signed = false }: { value: number; signed?: boolean }) {
+  const cls = signed && value > 0 ? "pos" : signed && value < 0 ? "neg" : "";
+  return <span className={`hours ${cls}`}>{value === 0 && signed ? "0:00" : fmtMin(value, signed)}</span>;
+}
+
+// ---------------------------------------------------------------------------
+// Tratamento de um funcionario
+// ---------------------------------------------------------------------------
+
+export default function Treatment({ me, goAccount }: { me: Me; goAccount: () => void }) {
+  const params = hashParams();
+  const { periods, error: periodError } = usePeriods();
+  const [start, setStart] = useState(params.get("start") ?? "");
+  const [cpf, setCpf] = useState(params.get("cpf") ?? "");
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [person, setPerson] = useState("");
+  const [data, setData] = useState<TimesheetData | null>(null);
+  const [error, setError] = useState("");
+  const [open, setOpen] = useState<string>("");
+  const [onlyAlerts, setOnlyAlerts] = useState(false);
+
+  useEffect(() => {
+    rpc<Employee[]>("portal_employees").then(setEmployees).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    if (periods && !start) setStart((periods.find((p) => p.current) ?? periods[0]).start);
+  }, [periods, start]);
+
+  const period = periods?.find((p) => p.start === start) ?? null;
+  const emp = employees.find((e) => e.cpf === cpf) ?? null;
+  const active = useMemo(() => employees.filter((e) => e.active), [employees]);
+
+  useEffect(() => {
+    if (emp) setPerson(`${emp.name} · ${formatCpf(emp.cpf)}`);
+  }, [emp?.cpf]);
+
+  const load = () => {
+    if (!period || !cpf) return;
+    setError("");
+    rpc<TimesheetData>("portal_timesheet", { p_from: period.start, p_to: period.end, p_cpf: cpf })
+      .then(setData)
+      .catch((e) => setError(errorText(e, "Não foi possível carregar o ponto.")));
+  };
+
+  useEffect(() => {
+    setData(null);
+    setOpen("");
+    load();
+    if (cpf && start) window.history.replaceState(null, "", `#treatment?cpf=${cpf}&start=${start}`);
+  }, [cpf, start, period?.end]);
+
+  const sheet = useMemo(() => {
+    if (!data || !data.employees[0]) return null;
+    return computeEmployee(data, data.employees[0]);
+  }, [data]);
+
+  const pick = (text: string) => {
+    setPerson(text);
+    const found = employees.find((e) => `${e.name} · ${formatCpf(e.cpf)}` === text);
+    if (found) setCpf(found.cpf);
+  };
+
+  const step = (dir: number) => {
+    const i = active.findIndex((e) => e.cpf === cpf);
+    const next = active[(i + dir + active.length) % active.length];
+    if (next) setCpf(next.cpf);
+  };
+
+  const needsCpf = me.cpf.length !== 11;
+  const closed = !!period?.closed;
+  const days = sheet ? sheet.days.filter((d) => !onlyAlerts || d.flags.some((f) => ALERTS.includes(f))) : [];
+
+  return (
+    <>
+      <PageHead
+        title="Tratamento"
+        lead="Ajuste o ponto dia a dia. A marcação original nunca é apagada: cada ajuste fica registrado com motivo, CPF e horário."
+      />
+      {needsCpf && (
+        <Banner tone="warn">
+          Para tratar o ponto, informe antes o seu CPF: ele fica registrado em cada ajuste.{" "}
+          <button className="link inline" onClick={goAccount}>Ir para Minha conta</button>
+        </Banner>
+      )}
+      {(periodError || error) && <Banner tone="error">{periodError || error}</Banner>}
+
+      <div className="card filters treat-filters">
+        <label>
+          Período
+          {periods ? <PeriodSelect periods={periods} value={start} onChange={setStart} /> : <select disabled />}
+        </label>
+        <label className="wide">
+          Funcionário
+          <input list="treat-employees" value={person} placeholder="Nome ou CPF" onChange={(e) => pick(e.target.value)} />
+          <datalist id="treat-employees">
+            {active.map((e) => <option key={e.cpf} value={`${e.name} · ${formatCpf(e.cpf)}`} />)}
+          </datalist>
+        </label>
+        <div className="filter-actions">
+          <button className="ghost" type="button" onClick={() => step(-1)} disabled={!cpf}>Anterior</button>
+          <button className="ghost" type="button" onClick={() => step(1)} disabled={!cpf}>Próximo</button>
+        </div>
+      </div>
+
+      {!cpf ? (
+        <Empty>Escolha um funcionário para ver o ponto do período.</Empty>
+      ) : !sheet ? (
+        error ? null : <Loading />
+      ) : (
+        <>
+          {closed && (
+            <Banner tone="warn">
+              Período fechado em {new Date(period!.closed!.closed_at).toLocaleDateString("pt-BR")}. Somente consulta.
+            </Banner>
+          )}
+          {sheet.schedule_missing && (
+            <Banner tone="warn">
+              Funcionário sem jornada em parte do período: defina a jornada na tela Funcionários para calcular as horas.
+            </Banner>
+          )}
+          <div className="stats six">
+            <Total label="Previsto" value={sheet.totals.expected} />
+            <Total label="Trabalhado" value={sheet.totals.worked} note={sheet.totals.night ? `${fmtMin(sheet.totals.night)} noturnas` : undefined} />
+            <Total label="Extras" value={sheet.totals.extra} />
+            <Total label="Atrasos e faltas" value={sheet.totals.missing} />
+            <Total label="Banco anterior" value={sheet.totals.bank_before} signed />
+            <Total label="Banco final" value={sheet.totals.bank_after} signed note={`Movimento ${fmtMin(sheet.totals.bank_delta, true)}`} />
+          </div>
+
+          <section className="card flush">
+            <div className="card-head pad">
+              <h2>{sheet.name}</h2>
+              <label className="check">
+                <input type="checkbox" checked={onlyAlerts} onChange={(e) => setOnlyAlerts(e.target.checked)} />
+                Só dias com alerta ({sheet.totals.pending_days})
+              </label>
+            </div>
+            <div className="table-wrap">
+              <table className="sheet">
+                <thead>
+                  <tr>
+                    <th>Dia</th>
+                    <th>Jornada</th>
+                    <th>Marcações</th>
+                    <th className="num">Previsto</th>
+                    <th className="num">Trabalhado</th>
+                    <th className="num">Saldo</th>
+                    <th>Alertas</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {days.length === 0 && (
+                    <tr><td colSpan={8}><Empty>Nenhum dia com alerta.</Empty></td></tr>
+                  )}
+                  {days.map((d) => (
+                    <DayRows
+                      key={d.date}
+                      day={d}
+                      open={open === d.date}
+                      toggle={() => setOpen(open === d.date ? "" : d.date)}
+                      readOnly={closed || d.closed || needsCpf}
+                      onChanged={load}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </>
+      )}
+    </>
+  );
+}
+
+function Total({ label, value, signed, note }: { label: string; value: number; signed?: boolean; note?: string }) {
+  return (
+    <div className="stat">
+      <div className="muted small">{label}</div>
+      <div className="stat-value small-value"><Hours value={value} signed={signed} /></div>
+      {note && <div className="muted small">{note}</div>}
+    </div>
+  );
+}
+
+function MarkChip({ m }: { m: DayMark }) {
+  const cls = m.kind === "I" ? "chip incl" : m.disregard ? "chip off" : "chip";
+  const title = m.kind === "I"
+    ? `Incluída: ${m.reason}`
+    : m.disregard
+    ? `Desconsiderada: ${m.disregard.reason}`
+    : `NSR ${m.nsr} · ${FACE_LABEL[m.face ?? ""] ?? ""}${m.online === false ? " · off-line" : ""}`;
+  const alert = m.kind === "O" && !m.disregard && m.face && m.face !== "ROSTO_CONFERE" && m.face !== "VIVACIDADE_OK";
+  return (
+    <span className={cls + (alert ? " alert" : "")} title={title}>
+      {fmtClock(m.at_min)}{m.next_day ? "⁺¹" : ""}{m.kind === "I" ? " I" : ""}
+    </span>
+  );
+}
+
+function DayRows({ day, open, toggle, readOnly, onChanged }: {
+  day: Day;
+  open: boolean;
+  toggle: () => void;
+  readOnly: boolean;
+  onChanged: () => void;
+}) {
+  const alerts = day.flags.filter((f) => f !== "ajustado");
+  const rest = day.expected_base === 0;
+  return (
+    <>
+      <tr className={(rest ? "rest " : "") + (open ? "open" : "")}>
+        <td className="nowrap">
+          <span className="strong">{br(day.date).slice(0, 5)}</span> <span className="muted">{WEEKDAY[day.weekday]}</span>
+        </td>
+        <td className="small nowrap">
+          {day.schedule_times.length
+            ? day.schedule_times.map((t) => `${t.slice(0, 2)}:${t.slice(2)}`).join(" ")
+            : <span className="muted">{day.schedule_code ? "Descanso" : "Sem jornada"}</span>}
+        </td>
+        <td>
+          <div className="chips">
+            {day.marks.map((m, i) => <MarkChip key={i} m={m} />)}
+            {day.occurrences.map((o) => (
+              <span key={o.id} className="chip occ" title={o.reason}>
+                {OCCURRENCE_LABEL[o.type] ?? o.type}{o.minutes ? ` ${fmtMin(o.minutes)}` : ""}
+              </span>
+            ))}
+          </div>
+        </td>
+        <td className="num">{day.expected ? fmtMin(day.expected) : <span className="muted">–</span>}</td>
+        <td className="num">{day.worked ? fmtMin(day.worked) : <span className="muted">–</span>}</td>
+        <td className="num">
+          <Hours value={day.balance} signed />
+          {day.tolerance && <div className="muted small">tolerância</div>}
+        </td>
+        <td>
+          <div className="chips">
+            {alerts.map((f) => (
+              <Badge key={f} tone={ALERTS.includes(f) ? "error" : "neutral"}>{FLAG_LABEL[f] ?? f}</Badge>
+            ))}
+          </div>
+        </td>
+        <td className="right">
+          <button className={open ? "ghost small on" : "ghost small"} onClick={toggle}>
+            {readOnly ? "Detalhes" : "Tratar"}
+          </button>
+        </td>
+      </tr>
+      {open && (
+        <tr className="panel-row">
+          <td colSpan={8}>
+            <DayPanel day={day} readOnly={readOnly} onChanged={onChanged} />
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+const PARTIAL = new Set(["abono", "atestado"]);
+
+function DayPanel({ day, readOnly, onChanged }: { day: Day; readOnly: boolean; onChanged: () => void }) {
+  const [include, setInclude] = useState({ time: "", nextDay: false, reason: "" });
+  const [occ, setOcc] = useState({ type: "atestado", to: day.date, minutes: "", reason: "" });
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  const run = async (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    setMsg("");
+    try {
+      await fn();
+      onChanged();
+    } catch (e) {
+      setMsg(errorText(e));
+    }
+    setBusy(false);
+  };
+
+  const ask = (question: string) => {
+    const r = window.prompt(question);
+    return r && r.trim().length >= 3 ? r.trim() : null;
+  };
+
+  const markAction = (m: DayMark) => {
+    if (m.kind === "I") {
+      const reason = ask(`Motivo para remover a marcação incluída às ${fmtClock(m.at_min)}:`);
+      if (reason) run(() => rpc("portal_adjust_revoke", { p_id: m.adj_id, p_reason: reason }));
+    } else if (m.disregard) {
+      const reason = ask(`Motivo para voltar a considerar a marcação das ${fmtClock(m.at_min)}:`);
+      if (reason) run(() => rpc("portal_adjust_revoke", { p_id: m.disregard!.id, p_reason: reason }));
+    } else {
+      const reason = ask(`Motivo para desconsiderar a marcação das ${fmtClock(m.at_min)} (NSR ${m.nsr}):`);
+      if (reason) run(() => rpc("portal_mark_disregard", { p_nsr: m.nsr, p_reason: reason }));
+    }
+  };
+
+  const addMark = (e: React.FormEvent) => {
+    e.preventDefault();
+    const date = include.nextDay ? nextDate(day.date) : day.date;
+    run(async () => {
+      await rpc("portal_mark_include", { p_cpf: day.cpf, p_local: `${date}T${include.time}`, p_reason: include.reason });
+      setInclude({ time: "", nextDay: false, reason: "" });
+    });
+  };
+
+  const addOcc = (e: React.FormEvent) => {
+    e.preventDefault();
+    run(async () => {
+      await rpc("portal_occurrence_add", {
+        p: {
+          cpf: day.cpf, type: occ.type, date_from: day.date, date_to: occ.to || day.date,
+          minutes: PARTIAL.has(occ.type) && occ.minutes ? hhmmToMin(occ.minutes) : null, reason: occ.reason,
+        },
+      });
+      setOcc({ type: "atestado", to: day.date, minutes: "", reason: "" });
+    });
+  };
+
+  return (
+    <div className="day-panel">
+      {msg && <Banner tone="error">{msg}</Banner>}
+      <div className="panel-grid">
+        <div>
+          <h3>Marcações</h3>
+          {day.marks.length === 0 ? <p className="muted small">Nenhuma marcação.</p> : (
+            <ul className="mark-list">
+              {day.marks.map((m, i) => (
+                <li key={i}>
+                  <MarkChip m={m} />
+                  <span className="small">
+                    {m.kind === "I" ? <>Incluída · {m.reason}</>
+                      : m.disregard ? <>Desconsiderada · {m.disregard.reason}</>
+                      : <>Original · NSR {m.nsr} · {FACE_LABEL[m.face ?? ""] ?? "–"}{m.online === false ? " · off-line" : ""}</>}
+                  </span>
+                  {!readOnly && (
+                    <button className="link small" disabled={busy} onClick={() => markAction(m)}>
+                      {m.kind === "I" ? "Remover" : m.disregard ? "Voltar a considerar" : "Desconsiderar"}
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+          {day.occurrences.length > 0 && (
+            <>
+              <h3>Ocorrências</h3>
+              <ul className="mark-list">
+                {day.occurrences.map((o) => (
+                  <li key={o.id}>
+                    <span className="chip occ">{OCCURRENCE_LABEL[o.type] ?? o.type}{o.minutes ? ` ${fmtMin(o.minutes)}` : ""}</span>
+                    <span className="small">
+                      {o.reason}{o.date_from !== o.date_to ? ` · ${br(o.date_from)} a ${br(o.date_to)}` : ""}
+                    </span>
+                    {!readOnly && o.cpf && (
+                      <button className="link small" disabled={busy} onClick={() => {
+                        const reason = ask("Motivo para cancelar a ocorrência:");
+                        if (reason) run(() => rpc("portal_occurrence_revoke", { p_id: o.id, p_reason: reason }));
+                      }}>
+                        Cancelar
+                      </button>
+                    )}
+                    {!o.cpf && <span className="muted small">(da empresa, em Jornadas)</span>}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+          <p className="muted small">
+            Trabalhado {fmtMin(day.worked_real)} real{day.night ? `, ${fmtMin(day.night)} noturnas (hora reduzida)` : ""}.
+            {day.bank_delta ? ` Banco de horas: ${fmtMin(day.bank_delta, true)}.` : ""}
+          </p>
+        </div>
+
+        {!readOnly && (
+          <div>
+            <form onSubmit={addMark}>
+              <h3>Incluir marcação</h3>
+              <div className="row">
+                <input type="time" value={include.time} onChange={(e) => setInclude({ ...include, time: e.target.value })} required className="time" />
+                <label className="check">
+                  <input type="checkbox" checked={include.nextDay} onChange={(e) => setInclude({ ...include, nextDay: e.target.checked })} />
+                  dia seguinte
+                </label>
+              </div>
+              <input placeholder="Motivo (ex.: esqueceu de marcar a saída)" value={include.reason}
+                onChange={(e) => setInclude({ ...include, reason: e.target.value })} required minLength={3} />
+              <button className="primary small" disabled={busy} type="submit">Incluir</button>
+            </form>
+
+            <form onSubmit={addOcc}>
+              <h3>Lançar ocorrência</h3>
+              <div className="row">
+                <select value={occ.type} onChange={(e) => setOcc({ ...occ, type: e.target.value })}>
+                  {Object.entries(OCCURRENCE_LABEL).filter(([k]) => k !== "feriado").map(([k, v]) => (
+                    <option key={k} value={k}>{v}</option>
+                  ))}
+                </select>
+                {PARTIAL.has(occ.type) ? (
+                  <input type="time" className="time" value={occ.minutes} title="Horas abonadas (vazio = dia inteiro)"
+                    onChange={(e) => setOcc({ ...occ, minutes: e.target.value })} required={occ.type === "abono"} />
+                ) : null}
+              </div>
+              {PARTIAL.has(occ.type) && (
+                <p className="muted small">
+                  {occ.type === "abono" ? "Informe as horas abonadas (ex.: 02:00)." : "Horas do atestado; deixe vazio para o dia inteiro."}
+                </p>
+              )}
+              <label className="inline">
+                Até
+                <input type="date" value={occ.to} min={day.date} onChange={(e) => setOcc({ ...occ, to: e.target.value })} />
+              </label>
+              <input placeholder="Motivo ou documento (ex.: atestado médico entregue ao RH)" value={occ.reason}
+                onChange={(e) => setOcc({ ...occ, reason: e.target.value })} required minLength={3} />
+              <button className="primary small" disabled={busy} type="submit">Lançar</button>
+            </form>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function nextDate(date: string) {
+  const [y, m, d] = date.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
+}
+
+function hhmmToMin(v: string) {
+  const [h, m] = v.split(":").map(Number);
+  return h * 60 + (m || 0);
+}

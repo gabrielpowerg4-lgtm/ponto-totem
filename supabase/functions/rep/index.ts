@@ -3,6 +3,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { buildAej, buildAfd, FiscalError } from "./fiscal.ts";
+import { closingRow, computeAll, type TimesheetData } from "./jornada.ts";
 
 const db = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -95,11 +96,24 @@ function failure(error: { message?: string } | null): Response {
   for (const code of [
     "missing_fields", "invalid_employer_id", "invalid_cno", "invalid_caepf",
     "invalid_responsible_cpf", "invalid_schedule", "invalid_period", "not_allowed",
+    "cpf_required", "period_closed", "period_not_finished",
   ]) {
     if (message.includes(code)) return json(400, { error: code });
   }
   console.error("rep error:", message);
   return json(500, { error: "server_error" });
+}
+
+// Usuario do portal identificado pelo token de sessao.
+async function portalCaller(req: Request): Promise<{ id: string; company: string; role: string } | null> {
+  const header = req.headers.get("Authorization") ?? "";
+  const jwt = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+  if (!jwt) return null;
+  const { data } = await db.auth.getUser(jwt);
+  if (!data?.user) return null;
+  const { data: pu } = await db.from("portal_users").select("company_id, role").eq("user_id", data.user.id)
+    .maybeSingle();
+  return pu ? { id: data.user.id, company: pu.company_id, role: pu.role } : null;
 }
 
 Deno.serve(async (req: Request) => {
@@ -192,6 +206,35 @@ Deno.serve(async (req: Request) => {
       return json(200, { ok: true });
     }
 
+    // Portal: fechamento do periodo. O calculo e refeito aqui, com as mesmas regras da tela,
+    // e o resultado de cada dia fica gravado (Espelho, AEJ e Bubble usam este resultado).
+    if (req.method === "POST" && path.endsWith("/v1/portal/periods/close")) {
+      const caller = await portalCaller(req);
+      if (!caller) return json(401, { error: "invalid_token" });
+      const body = await req.json();
+      const start = String(body.start ?? "");
+      const end = String(body.end ?? "");
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) {
+        return json(400, { error: "invalid_period" });
+      }
+      const { data, error } = await db.rpc("rep_timesheet_data", {
+        p_company: caller.company, p_from: start, p_to: end, p_cpf: "",
+      });
+      if (error) return failure(error);
+      const sheets = computeAll(data as TimesheetData);
+      const days = sheets.flatMap((sh) => sh.days.map(closingRow));
+      const { error: closeError } = await db.rpc("rep_period_close", {
+        p_user: caller.id, p_start: start, p_end: end, p_days: days,
+      });
+      if (closeError) return failure(closeError);
+      return json(200, {
+        ok: true,
+        employees: sheets.length,
+        days: days.length,
+        pending_days: sheets.reduce((x, sh) => x + sh.totals.pending_days, 0),
+      });
+    }
+
     const tokenHash = await bearerHash(req);
     if (!tokenHash) return json(401, { error: "invalid_token" });
 
@@ -218,7 +261,19 @@ Deno.serve(async (req: Request) => {
           }
           const { data, error } = await db.rpc("rep_int_upsert_employee", { p_key_hash: tokenHash, p_item: parsed });
           if (error) return failure(error);
-          results.push(data);
+          // Jornada opcional: codigo cadastrado no portal, valendo a partir de jornada_inicio (ou hoje).
+          const code = item?.jornada === undefined || item?.jornada === null ? "" : String(item.jornada).trim();
+          if (code !== "" && data?.operacao !== "erro") {
+            const from = /^\d{4}-\d{2}-\d{2}$/.test(String(item?.jornada_inicio ?? ""))
+              ? String(item.jornada_inicio)
+              : null;
+            const r = await db.rpc("rep_int_set_schedule", {
+              p_key_hash: tokenHash, p_cpf: String(item?.cpf ?? ""), p_code: code, p_from: from,
+            });
+            results.push({ ...data, jornada: r.error ? "erro" : r.data });
+          } else {
+            results.push(data);
+          }
         }
         return json(200, many ? { resultados: results } : results[0]);
       }

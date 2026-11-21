@@ -3,7 +3,7 @@ name: Publicar portal
 on:
   push:
     branches: [main]
-    paths: ["portal/**", ".github/workflows/portal.yml"]
+    paths: ["portal/**", "supabase/functions/rep/jornada.ts", ".github/workflows/portal.yml"]
   workflow_dispatch:
 
 permissions:

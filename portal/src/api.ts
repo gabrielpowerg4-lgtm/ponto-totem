@@ -49,6 +49,10 @@ export type Company = {
   default_responsible_cpf: string;
   timezone: string;
   last_nsr: number;
+  closing_day: number;
+  hour_bank: boolean;
+  tol_mark: number;
+  tol_day: number;
   inpi_number: string;
   dev_id: string;
   dev_name: string;
@@ -65,6 +69,7 @@ export type Employee = {
   external_id: string;
   updated_at: string;
   sites: string[];
+  schedule: { id: string; code: string; valid_from: string } | null;
   last_punch_at: string | null;
 };
 
@@ -143,6 +148,17 @@ const ERRORS: Record<string, string> = {
   email_exists: "Já existe uma conta com este e-mail.",
   invalid_key: "Chave da empresa incorreta.",
   admin_exists: "Esta empresa já tem um administrador. Peça acesso a ele.",
+  missing_reason: "Informe o motivo (pelo menos 3 letras).",
+  period_closed: "Este período já está fechado. Para alterar, o administrador precisa reabri-lo.",
+  period_not_finished: "O período ainda não terminou.",
+  future_datetime: "Não é possível incluir marcação no futuro.",
+  invalid_datetime: "Data ou hora inválida.",
+  already_done: "Esta marcação já está desconsiderada.",
+  invalid_code: "Código inválido: use letras, números, - ou _ (até 30).",
+  duplicate_code: "Já existe uma jornada com este código.",
+  invalid_schedule: "Horários inválidos: informe pares de entrada e saída em ordem (HH:MM).",
+  not_latest: "Só é possível reabrir o último período fechado.",
+  invalid_rules: "Regras inválidas.",
 };
 
 export function errorText(e: unknown, fallback = "Não foi possível concluir. Tente de novo."): string {
@@ -159,7 +175,7 @@ export async function rpc<T>(name: string, args?: Record<string, unknown>): Prom
   return data as T;
 }
 
-async function post(path: string, body: unknown, auth: boolean): Promise<void> {
+async function post(path: string, body: unknown, auth: boolean): Promise<Record<string, unknown>> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (auth) {
     const { data } = await supabase.auth.getSession();
@@ -171,8 +187,8 @@ async function post(path: string, body: unknown, auth: boolean): Promise<void> {
   } catch {
     throw new Error("Não foi possível falar com o servidor.");
   }
-  if (res.ok) return;
   const out = await res.json().catch(() => ({}));
+  if (res.ok) return out;
   throw new Error(String(out.error ?? "failed"));
 }
 
@@ -193,6 +209,37 @@ export async function createPortalUser(u: { email: string; password: string; rol
     throw new Error(errorText(e, "Não foi possível criar o usuário."));
   }
 }
+
+/** Fecha o periodo: o servidor recalcula e grava o resultado de cada dia. */
+export async function closePeriod(start: string, end: string) {
+  try {
+    return (await post("/v1/portal/periods/close", { start, end }, true)) as {
+      employees: number;
+      days: number;
+      pending_days: number;
+    };
+  } catch (e) {
+    throw new Error(errorText(e, "Não foi possível fechar o período."));
+  }
+}
+
+export type Period = {
+  start: string;
+  end: string;
+  current: boolean;
+  closed: { closed_at: string; closed_cpf: string; closed_by: string } | null;
+};
+
+export type ScheduleRow = {
+  id: string;
+  code: string;
+  name: string;
+  days: string[][];
+  active: boolean;
+  employees: number;
+};
+
+export type Holiday = { id: string; type: string; date_from: string; date_to: string; reason: string };
 
 // ---------------------------------------------------------------------------
 // Formatos (no fuso da empresa)
@@ -255,3 +302,12 @@ export function download(filename: string, content: string, type = "text/csv;cha
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
+/** Data AAAA-MM-DD como dd/mm/aaaa (sem fuso). */
+export function br(date: string): string {
+  const [y, m, d] = date.split("-");
+  return `${d}/${m}/${y}`;
+}
+
+export const WEEKDAY = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+export const WEEKDAY_FULL = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
