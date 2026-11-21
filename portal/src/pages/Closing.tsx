@@ -4,12 +4,33 @@ import { ALERTS, computeAll, FLAG_LABEL, fmtMin, type Sheet, type TimesheetData 
 import { Badge, Banner, Empty, Loading, PageHead } from "../ui";
 import { Hours, PeriodSelect, usePeriods } from "./Treatment";
 
-export default function Closing({ me, openTreatment }: { me: Me; openTreatment: (cpf: string, start: string) => void }) {
+type Mode = "pending" | "close" | "report";
+
+const TEXT: Record<Mode, { title: string; lead: string }> = {
+  pending: {
+    title: "Pendências",
+    lead: "Dias com alerta de todos os funcionários no período e avisos enviados pelos responsáveis dos tablets.",
+  },
+  close: {
+    title: "Fechamento",
+    lead: "Feche o período depois de tratar as pendências. O período fechado é o que vai para o Espelho de Ponto, o AEJ e o Bubble.",
+  },
+  report: {
+    title: "Apuração do período",
+    lead: "Totais de cada funcionário no período: previsto, trabalhado, noturnas, extras, faltas e banco de horas.",
+  },
+};
+
+export default function Closing({ mode, me, openTreatment }: {
+  mode: Mode;
+  me: Me;
+  openTreatment: (cpf: string, start: string) => void;
+}) {
   const { periods, error: periodError, reload: reloadPeriods } = usePeriods();
   const [start, setStart] = useState("");
   const [data, setData] = useState<TimesheetData | null>(null);
   const [error, setError] = useState("");
-  const [show, setShow] = useState<"pending" | "all">("pending");
+  const [show, setShow] = useState<"pending" | "all">(mode === "report" ? "all" : "pending");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ tone: "ok" | "error" | "warn"; text: string } | null>(null);
 
@@ -106,9 +127,9 @@ export default function Closing({ me, openTreatment }: { me: Me; openTreatment: 
   return (
     <>
       <PageHead
-        title="Fechamento"
-        lead="Confira as pendências de todos os funcionários e feche o período. O período fechado é o que vai para o Espelho de Ponto, o AEJ e o Bubble."
-        actions={sheets.length > 0 && <button className="ghost" onClick={exportCsv}>Exportar apuração</button>}
+        title={TEXT[mode].title}
+        lead={TEXT[mode].lead}
+        actions={mode === "report" && sheets.length > 0 && <button className="ghost" onClick={exportCsv}>Exportar CSV</button>}
       />
       {(periodError || error) && <Banner tone="error">{periodError || error}</Banner>}
       {msg && <Banner tone={msg.tone}>{msg.text}</Banner>}
@@ -118,7 +139,7 @@ export default function Closing({ me, openTreatment }: { me: Me; openTreatment: 
           Período
           {periods ? <PeriodSelect periods={periods} value={start} onChange={setStart} /> : <select disabled />}
         </label>
-        <div className="closing-status">
+        {mode === "close" && <div className="closing-status">
           {period?.closed ? (
             <>
               <Badge tone="ok">Fechado</Badge>
@@ -141,9 +162,10 @@ export default function Closing({ me, openTreatment }: { me: Me; openTreatment: 
               )}
             </>
           )}
-        </div>
+        </div>}
+        {mode !== "close" && period?.closed && <Badge tone="ok">Período fechado</Badge>}
       </div>
-      {me.cpf.length !== 11 && !period?.closed && (
+      {mode === "close" && me.cpf.length !== 11 && !period?.closed && (
         <Banner tone="warn">Para fechar o período é preciso o seu CPF: não achamos um funcionário com o seu e-mail de acesso. Veja em Minha conta.</Banner>
       )}
 
@@ -174,12 +196,21 @@ export default function Closing({ me, openTreatment }: { me: Me; openTreatment: 
             </div>
           </div>
 
-          <div className="toolbar">
+          {mode === "close" && (
+            <p className="muted">
+              {summary.pendingDays > 0
+                ? `Ainda há ${summary.pendingDays} dia(s) com alerta. Trate em Ponto, Pendências, antes de fechar.`
+                : "Nenhuma pendência no período."}
+            </p>
+          )}
+          {mode === "pending" && <Notices />}
+          {mode !== "close" && <>
+          {mode === "pending" && <div className="toolbar">
             <div className="segmented">
               <button className={show === "pending" ? "on" : ""} onClick={() => setShow("pending")}>Com alerta</button>
               <button className={show === "all" ? "on" : ""} onClick={() => setShow("all")}>Todos</button>
             </div>
-          </div>
+          </div>}
 
           <section className="card flush">
             {list.length === 0 ? (
@@ -193,6 +224,9 @@ export default function Closing({ me, openTreatment }: { me: Me; openTreatment: 
                       <th>Alertas</th>
                       <th className="num">Previsto</th>
                       <th className="num">Trabalhado</th>
+                      {mode === "report" && <th className="num">Noturnas</th>}
+                      {mode === "report" && <th className="num">Extras</th>}
+                      {mode === "report" && <th className="num">Faltas</th>}
                       <th className="num">Saldo</th>
                       <th className="num">Banco final</th>
                       <th />
@@ -208,6 +242,9 @@ export default function Closing({ me, openTreatment }: { me: Me; openTreatment: 
                         <td><Alerts sheet={s} /></td>
                         <td className="num">{fmtMin(s.totals.expected)}</td>
                         <td className="num">{fmtMin(s.totals.worked)}</td>
+                        {mode === "report" && <td className="num">{fmtMin(s.totals.night)}</td>}
+                        {mode === "report" && <td className="num">{fmtMin(s.totals.extra)}</td>}
+                        {mode === "report" && <td className="num">{fmtMin(s.totals.missing)}</td>}
                         <td className="num"><Hours value={s.totals.extra - s.totals.missing} signed /></td>
                         <td className="num"><Hours value={s.totals.bank_after} signed /></td>
                         <td className="right">
@@ -222,6 +259,7 @@ export default function Closing({ me, openTreatment }: { me: Me; openTreatment: 
               </div>
             )}
           </section>
+          </>}
         </>
       )}
     </>
@@ -238,5 +276,68 @@ function Alerts({ sheet }: { sheet: Sheet }) {
     <div className="chips">
       {keys.map((f) => <Badge key={f} tone="error">{FLAG_LABEL[f]} {counts[f]}</Badge>)}
     </div>
+  );
+}
+
+type Notice = {
+  id: string;
+  terminal: string;
+  responsible: string | null;
+  responsible_cpf: string;
+  employee: string | null;
+  employee_cpf: string;
+  day: string | null;
+  text: string;
+  created_at: string;
+};
+
+/** Avisos de campo enviados pelos responsaveis dos tablets. */
+function Notices() {
+  const [list, setList] = useState<Notice[] | null>(null);
+  const [error, setError] = useState("");
+  const load = () => rpc<Notice[]>("portal_notices", { p_open: true }).then(setList).catch(() => setList([]));
+  useEffect(() => {
+    load();
+  }, []);
+
+  const done = async (n: Notice) => {
+    const note = window.prompt("O que foi feito? (opcional)") ?? null;
+    if (note === null) return;
+    setError("");
+    try {
+      await rpc("portal_notice_done", { p_id: n.id, p_note: note });
+      load();
+    } catch (e) {
+      setError(errorText(e));
+    }
+  };
+
+  if (!list || list.length === 0) return null;
+  return (
+    <section className="card">
+      <h2>Avisos da obra ({list.length})</h2>
+      {error && <Banner tone="error">{error}</Banner>}
+      <table>
+        <tbody>
+          {list.map((n) => (
+            <tr key={n.id}>
+              <td className="nowrap small">
+                {new Date(n.created_at).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })}
+                <div className="muted">{n.terminal}</div>
+              </td>
+              <td>
+                <div>{n.text}</div>
+                <div className="muted small">
+                  {n.responsible ?? formatCpf(n.responsible_cpf)}
+                  {n.employee_cpf ? ` · sobre ${n.employee ?? formatCpf(n.employee_cpf)}` : ""}
+                  {n.day ? ` · dia ${br(n.day)}` : ""}
+                </div>
+              </td>
+              <td className="right"><button className="ghost small" onClick={() => done(n)}>Resolvido</button></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
   );
 }

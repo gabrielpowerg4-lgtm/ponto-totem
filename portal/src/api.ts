@@ -72,6 +72,8 @@ export type Employee = {
   updated_at: string;
   sites: string[];
   schedule: { id: string; code: string; valid_from: string } | null;
+  portal_role?: "" | "admin" | "rh";
+  tablet_responsible?: boolean;
   last_punch_at: string | null;
 };
 
@@ -163,6 +165,9 @@ const ERRORS: Record<string, string> = {
   invalid_schedule: "Horários inválidos: informe pares de entrada e saída em ordem (HH:MM).",
   not_latest: "Só é possível reabrir o último período fechado.",
   invalid_rules: "Regras inválidas.",
+  not_recognized: "Não conferiu. Verifique e-mail, CPF e senha de ponto, e se a empresa liberou seu acesso ao portal.",
+  too_many_attempts: "Muitas tentativas. Aguarde uma hora e tente de novo.",
+  already_active: "Este acesso já foi criado. Use a tela Entrar.",
 };
 
 export function errorText(e: unknown, fallback = "Não foi possível concluir. Tente de novo."): string {
@@ -202,6 +207,15 @@ export async function signupAdmin(email: string, password: string, companyKey: s
     await post("/v1/portal/signup", { email, password, company_key: companyKey }, false);
   } catch (e) {
     throw new Error(errorText(e, "Não foi possível criar a conta."));
+  }
+}
+
+/** Primeiro acesso de funcionario liberado pelo Bubble: confirma com CPF e senha de ponto. */
+export async function firstAccess(u: { email: string; cpf: string; pin: string; password: string }) {
+  try {
+    await post("/v1/portal/first-access", u, false);
+  } catch (e) {
+    throw new Error(errorText(e, "Não foi possível criar o acesso."));
   }
 }
 

@@ -228,6 +228,28 @@ pre {
   margin: 0;
 }
 
+/* Menu com grupos */
+.nav-item.top { font-weight: 600; color: var(--text); }
+.nav-head {
+  display: flex; align-items: center; justify-content: space-between; width: 100%; background: none;
+  color: var(--text); font-weight: 600; font-size: 13.5px; padding: 8px 10px; min-height: 36px; border-radius: 8px;
+}
+.nav-head:hover { background: var(--surface-2); }
+.nav-head.current { color: var(--accent); }
+.chev { display: inline-block; transition: transform 0.15s; color: var(--muted); font-size: 16px; line-height: 1; }
+.chev.open { transform: rotate(90deg); }
+.nav-items { display: flex; flex-direction: column; gap: 1px; padding-left: 10px; margin-left: 10px; border-left: 1px solid var(--border); }
+.nav-items .nav-item { font-size: 14px; min-height: 32px; padding: 6px 10px; display: flex; justify-content: space-between; align-items: center; }
+.nav-item:disabled { opacity: 0.55; cursor: default; }
+.nav-item:disabled:hover { background: none; color: var(--muted); }
+.soon { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.sidebar nav { gap: 6px; }
+.sidebar-foot .nav-item { text-align: left; }
+.auth-links { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; margin-top: 8px; }
+button.muted-link { color: var(--muted); }
+.chips.tight { margin-top: 4px; }
+td.detail { max-width: 420px; }
+
 /* Etapa 3: tratamento, fechamento e jornadas */
 .stats.six { grid-template-columns: repeat(6, 1fr); }
 .small-value { font-size: 22px; }

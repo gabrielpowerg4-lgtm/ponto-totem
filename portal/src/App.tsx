@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { API_BASE, formatDateTime, rpc, setTimezone, signupAdmin, supabase, type Me, type Summary } from "./api";
+import { API_BASE, firstAccess, formatDateTime, rpc, setTimezone, signupAdmin, supabase, type Me, type Summary } from "./api";
 import { PageHead, Stat } from "./ui";
 import Punches from "./pages/Punches";
 import { Employees, Sites, Terminals } from "./pages/Registers";
-import { Account, CompanyPage, Users } from "./pages/Admin";
-import Schedules from "./pages/Schedules";
+import { Account, CompanyPage, RulesPage, Users } from "./pages/Admin";
+import Schedules, { Holidays } from "./pages/Schedules";
+import { Audit, HourBank } from "./pages/Reports";
 import Treatment from "./pages/Treatment";
 import Closing from "./pages/Closing";
 
@@ -66,35 +67,38 @@ export default function App() {
 // ---------------------------------------------------------------------------
 
 function Auth({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void }) {
-  const [mode, setMode] = useState<"login" | "signup">("login");
+  const [mode, setMode] = useState<"login" | "employee" | "company">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [companyKey, setCompanyKey] = useState("");
+  const [cpf, setCpf] = useState("");
+  const [pin, setPin] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [info, setInfo] = useState("");
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
-    setInfo("");
-    if (mode === "signup" && password !== confirm) {
+    if (mode !== "login" && password !== confirm) {
       setError("As senhas não conferem.");
       return;
     }
     setBusy(true);
     try {
-      if (mode === "signup") {
-        await signupAdmin(email.trim(), password, companyKey.trim());
-        setInfo("Conta criada. Entrando.");
-      }
+      if (mode === "company") await signupAdmin(email.trim(), password, companyKey.trim());
+      if (mode === "employee") await firstAccess({ email: email.trim(), cpf, pin, password });
       const { error: err } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
       if (err) throw new Error("E-mail ou senha incorretos.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Não foi possível entrar.");
     }
     setBusy(false);
+  };
+
+  const switchTo = (m: typeof mode) => {
+    setMode(m);
+    setError("");
   };
 
   return (
@@ -110,11 +114,16 @@ function Auth({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void })
             {theme === "dark" ? "Tema claro" : "Tema escuro"}
           </button>
         </div>
-        <h1>{mode === "login" ? "Entrar" : "Primeiro acesso"}</h1>
-        {mode === "signup" && (
+        <h1>{mode === "login" ? "Entrar" : mode === "employee" ? "Primeiro acesso" : "Primeiro administrador"}</h1>
+        {mode === "employee" && (
           <p className="muted">
-            Crie a conta do administrador da empresa. Use a chave da empresa, a mesma que vincula os
-            tablets.
+            Para quem a empresa liberou o acesso ao portal. Confirme seus dados com a senha que você usa para marcar o
+            ponto no tablet e crie a senha do portal.
+          </p>
+        )}
+        {mode === "company" && (
+          <p className="muted">
+            Só para a primeira conta da empresa. Use a chave da empresa, a mesma que vincula os tablets.
           </p>
         )}
         <form onSubmit={submit}>
@@ -122,51 +131,54 @@ function Auth({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void })
             E-mail
             <input type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
           </label>
+          {mode === "employee" && (
+            <div className="grid-2">
+              <label>
+                CPF
+                <input inputMode="numeric" value={cpf} placeholder="11 números"
+                  onChange={(e) => setCpf(e.target.value.replace(/\D/g, "").slice(0, 11))} required minLength={11} />
+              </label>
+              <label>
+                Senha de ponto
+                <input type="password" inputMode="numeric" autoComplete="off" value={pin}
+                  onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 8))} required minLength={4} />
+              </label>
+            </div>
+          )}
           <label>
-            Senha
+            {mode === "login" ? "Senha" : "Nova senha do portal"}
             <input
               type="password"
               autoComplete={mode === "login" ? "current-password" : "new-password"}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
-              minLength={mode === "signup" ? 8 : undefined}
+              minLength={mode === "login" ? undefined : 8}
             />
           </label>
-          {mode === "signup" && (
-            <>
-              <label>
-                Confirme a senha
-                <input type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} required />
-              </label>
-              <label>
-                Chave da empresa
-                <input
-                  value={companyKey}
-                  onChange={(e) => setCompanyKey(e.target.value.toUpperCase())}
-                  placeholder="XXXX-XXXX-XXXX"
-                  autoComplete="off"
-                  required
-                />
-              </label>
-            </>
+          {mode !== "login" && (
+            <label>
+              Confirme a senha
+              <input type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} required />
+            </label>
+          )}
+          {mode === "company" && (
+            <label>
+              Chave da empresa
+              <input value={companyKey} onChange={(e) => setCompanyKey(e.target.value.toUpperCase())}
+                placeholder="XXXX-XXXX-XXXX" autoComplete="off" required />
+            </label>
           )}
           {error && <div className="banner error">{error}</div>}
-          {info && <div className="banner ok">{info}</div>}
           <button className="primary" disabled={busy} type="submit">
-            {busy ? "Aguarde" : mode === "login" ? "Entrar" : "Criar conta e entrar"}
+            {busy ? "Aguarde" : mode === "login" ? "Entrar" : "Criar senha e entrar"}
           </button>
         </form>
-        <button
-          className="link"
-          type="button"
-          onClick={() => {
-            setMode(mode === "login" ? "signup" : "login");
-            setError("");
-          }}
-        >
-          {mode === "login" ? "Primeiro acesso da empresa" : "Já tenho conta"}
-        </button>
+        <div className="auth-links">
+          {mode !== "login" && <button className="link" type="button" onClick={() => switchTo("login")}>Já tenho senha do portal</button>}
+          {mode !== "employee" && <button className="link" type="button" onClick={() => switchTo("employee")}>Primeiro acesso de funcionário</button>}
+          {mode !== "company" && <button className="link small muted-link" type="button" onClick={() => switchTo("company")}>Primeira conta da empresa</button>}
+        </div>
       </div>
     </div>
   );
@@ -176,27 +188,56 @@ function Auth({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void })
 // Portal
 // ---------------------------------------------------------------------------
 
-type Page = "home" | "punches" | "treatment" | "closing" | "employees" | "schedules" | "sites" | "terminals" |
-  "company" | "users" | "integration" | "account";
+type Page = "home" | "punches" | "treatment" | "pending" | "closing" | "bank" | "mirror" | "afd" | "aej" |
+  "report" | "audit" | "employees" | "schedules" | "holidays" | "sites" | "terminals" | "company" | "rules" |
+  "users" | "integration" | "account";
 
-const MENU: { page: Page; label: string; admin?: boolean; group: string }[] = [
-  { page: "home", label: "Início", group: "Ponto" },
-  { page: "punches", label: "Marcações", group: "Ponto" },
-  { page: "treatment", label: "Tratamento", group: "Ponto" },
-  { page: "closing", label: "Fechamento", group: "Ponto" },
-  { page: "employees", label: "Funcionários", group: "Cadastros" },
-  { page: "schedules", label: "Jornadas e feriados", group: "Cadastros" },
-  { page: "sites", label: "Obras", group: "Cadastros" },
-  { page: "terminals", label: "Tablets", group: "Cadastros" },
-  { page: "company", label: "Empresa", group: "Configurações" },
-  { page: "users", label: "Usuários", admin: true, group: "Configurações" },
-  { page: "integration", label: "Integração", admin: true, group: "Configurações" },
-  { page: "account", label: "Minha conta", group: "Configurações" },
+type Item = { page: Page; label: string; admin?: boolean; soon?: boolean };
+type Group = { id: string; label: string; admin?: boolean; items: Item[] };
+
+const GROUPS: Group[] = [
+  { id: "ponto", label: "Ponto", items: [
+    { page: "punches", label: "Marcações" },
+    { page: "treatment", label: "Tratamento" },
+    { page: "pending", label: "Pendências" },
+    { page: "closing", label: "Fechamento" },
+    { page: "bank", label: "Banco de horas" },
+  ] },
+  { id: "relatorios", label: "Relatórios e arquivos", items: [
+    { page: "mirror", label: "Espelho de Ponto", soon: true },
+    { page: "afd", label: "AFD", soon: true },
+    { page: "aej", label: "AEJ", soon: true },
+    { page: "report", label: "Apuração do período" },
+    { page: "audit", label: "Auditoria", admin: true },
+  ] },
+  { id: "cadastros", label: "Cadastros", items: [
+    { page: "employees", label: "Funcionários" },
+    { page: "schedules", label: "Jornadas" },
+    { page: "holidays", label: "Feriados" },
+    { page: "sites", label: "Obras" },
+    { page: "terminals", label: "Tablets" },
+  ] },
+  { id: "config", label: "Configurações", admin: true, items: [
+    { page: "company", label: "Empresa" },
+    { page: "rules", label: "Regras de apuração" },
+    { page: "users", label: "Usuários e perfis" },
+    { page: "integration", label: "Integração (API)" },
+  ] },
 ];
+
+const ALL_PAGES: Page[] = ["home", "account", ...GROUPS.flatMap((g) => g.items.map((i) => i.page))];
 
 function pageFromHash(): Page {
   const h = window.location.hash.replace("#", "").split("?")[0] as Page;
-  return MENU.some((m) => m.page === h) ? h : "home";
+  return ALL_PAGES.includes(h) ? h : "home";
+}
+
+function loadOpen(): Record<string, boolean> {
+  try {
+    return JSON.parse(localStorage.getItem("menu-open") ?? "{}");
+  } catch {
+    return {};
+  }
 }
 
 function Portal({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void }) {
@@ -204,6 +245,7 @@ function Portal({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void 
   const [denied, setDenied] = useState(false);
   const [page, setPageState] = useState<Page>(pageFromHash);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [open, setOpen] = useState<Record<string, boolean>>(loadOpen);
 
   const loadMe = () =>
     rpc<Me | null>("portal_me")
@@ -228,6 +270,16 @@ function Portal({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void 
   };
   const signOut = () => supabase.auth.signOut();
 
+  const toggleGroup = (id: string) => {
+    const next = { ...open, [id]: !isOpen(id) };
+    setOpen(next);
+    try {
+      localStorage.setItem("menu-open", JSON.stringify(next));
+    } catch {
+      // Sem armazenamento: o menu volta ao padrao na proxima visita.
+    }
+  };
+
   if (denied) {
     return (
       <div className="center column">
@@ -238,9 +290,19 @@ function Portal({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void 
   }
   if (!me) return <div className="center muted">Carregando</div>;
 
-  const items = MENU.filter((m) => !m.admin || me.role === "admin");
-  const current = items.some((m) => m.page === page) ? page : "home";
-  const groups = [...new Set(items.map((m) => m.group))];
+  const admin = me.role === "admin";
+  const groups = GROUPS.filter((g) => !g.admin || admin).map((g) => ({
+    ...g, items: g.items.filter((i) => !i.admin || admin),
+  }));
+  const allowed = ["home", "account", ...groups.flatMap((g) => g.items.filter((i) => !i.soon).map((i) => i.page))];
+  const current: Page = allowed.includes(page) ? page : "home";
+  const currentGroup = groups.find((g) => g.items.some((i) => i.page === current))?.id;
+  // Aberto por padrao: o grupo da pagina atual; os demais conforme o usuario deixou.
+  function isOpen(id: string) {
+    return open[id] ?? (id === currentGroup || id === "ponto");
+  }
+  const title = current === "home" ? "Início" : current === "account" ? "Minha conta"
+    : groups.flatMap((g) => g.items).find((i) => i.page === current)?.label;
 
   return (
     <div className="layout">
@@ -253,18 +315,33 @@ function Portal({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void 
           </div>
         </div>
         <nav>
+          <button className={current === "home" ? "nav-item top active" : "nav-item top"} onClick={() => go("home")}>
+            Início
+          </button>
           {groups.map((g) => (
-            <div key={g} className="nav-group">
-              <div className="nav-title">{g}</div>
-              {items.filter((m) => m.group === g).map((m) => (
-                <button key={m.page} className={current === m.page ? "nav-item active" : "nav-item"} onClick={() => go(m.page)}>
-                  {m.label}
-                </button>
-              ))}
+            <div key={g.id} className="nav-group">
+              <button className={currentGroup === g.id ? "nav-head current" : "nav-head"} onClick={() => toggleGroup(g.id)}
+                aria-expanded={isOpen(g.id)}>
+                <span>{g.label}</span>
+                <span className={isOpen(g.id) ? "chev open" : "chev"} aria-hidden="true">›</span>
+              </button>
+              {isOpen(g.id) && (
+                <div className="nav-items">
+                  {g.items.map((m) => (
+                    <button key={m.page} disabled={m.soon}
+                      className={current === m.page ? "nav-item active" : "nav-item"} onClick={() => go(m.page)}>
+                      {m.label}{m.soon && <span className="soon">em breve</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
         </nav>
         <div className="sidebar-foot">
+          <button className={current === "account" ? "nav-item active" : "nav-item"} onClick={() => go("account")}>
+            Minha conta
+          </button>
           <div className="muted small ellipsis">{me.email}</div>
           <div className="row">
             <button className="ghost small" onClick={toggleTheme}>{theme === "dark" ? "Tema claro" : "Tema escuro"}</button>
@@ -276,20 +353,30 @@ function Portal({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void 
       <div className="content">
         <header className="mobilebar">
           <button className="ghost small" onClick={() => setMenuOpen(true)}>Menu</button>
-          <span className="strong">{items.find((m) => m.page === current)?.label}</span>
+          <span className="strong">{title}</span>
         </header>
         <main>
           {current === "home" && <Home go={go} />}
           {current === "punches" && <Punches />}
           {current === "treatment" && <Treatment me={me} goAccount={() => go("account")} />}
-          {current === "closing" && (
-            <Closing me={me} openTreatment={(cpf, start) => go("treatment", `cpf=${cpf}&start=${start}`)} />
+          {current === "pending" && (
+            <Closing mode="pending" me={me} openTreatment={(cpf, start) => go("treatment", `cpf=${cpf}&start=${start}`)} />
           )}
+          {current === "closing" && (
+            <Closing mode="close" me={me} openTreatment={(cpf, start) => go("treatment", `cpf=${cpf}&start=${start}`)} />
+          )}
+          {current === "report" && (
+            <Closing mode="report" me={me} openTreatment={(cpf, start) => go("treatment", `cpf=${cpf}&start=${start}`)} />
+          )}
+          {current === "bank" && <HourBank />}
+          {current === "audit" && <Audit />}
           {current === "employees" && <Employees />}
           {current === "schedules" && <Schedules me={me} />}
+          {current === "holidays" && <Holidays />}
           {current === "sites" && <Sites me={me} />}
           {current === "terminals" && <Terminals me={me} />}
           {current === "company" && <CompanyPage me={me} goAccount={() => go("account")} />}
+          {current === "rules" && <RulesPage me={me} />}
           {current === "users" && <Users />}
           {current === "integration" && <Integration me={me} onChanged={loadMe} />}
           {current === "account" && <Account me={me} onChanged={loadMe} />}

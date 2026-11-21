@@ -130,8 +130,6 @@ export function CompanyPage({ me, goAccount }: { me: Me; goAccount: () => void }
         )}
       </form>
 
-      <Rules company={data} admin={admin} onSaved={setData} />
-
       <section className="card soft">
         <h2>Dados do REP-P</h2>
         <dl className="facts">
@@ -145,6 +143,17 @@ export function CompanyPage({ me, goAccount }: { me: Me; goAccount: () => void }
           <dd>{data.dev_name || <span className="muted">Ainda não informado</span>}</dd>
         </dl>
       </section>
+    </>
+  );
+}
+
+export function RulesPage({ me }: { me: Me }) {
+  const { data, error, setData } = useLoad(() => rpc<Company>("portal_company_get"));
+  return (
+    <>
+      <PageHead title="Regras de apuração" lead="Período de fechamento, banco de horas e tolerâncias usados no cálculo do ponto." />
+      {error && <Banner tone="error">{error}</Banner>}
+      {!data ? <Loading /> : <Rules company={data} admin={me.role === "admin"} onSaved={setData} />}
     </>
   );
 }
@@ -172,7 +181,6 @@ function Rules({ company, admin, onSaved }: { company: Company; admin: boolean; 
   const cut = form.closing_day;
   return (
     <form className="card form" onSubmit={save}>
-      <h2>Regras de apuração</h2>
       <div className="grid-2">
         <label>
           Período de apuração
@@ -226,6 +234,9 @@ export function Users() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
 
+  const { data: pending } = useLoad(() =>
+    rpc<{ cpf: string; name: string; email: string; role: Role }[]>("portal_access_pending").catch(() => []));
+
   const create = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form) return;
@@ -256,7 +267,7 @@ export function Users() {
     <>
       <PageHead
         title="Usuários"
-        lead="Quem acessa o portal. O RH consulta e trata as marcações; o administrador também altera cadastros, tablets e usuários."
+        lead="Quem acessa o portal. O perfil pode vir do Bubble (campo perfil_portal) ou ser criado aqui. O RH trata e fecha o ponto; o administrador também configura o sistema."
         actions={!form && (
           <button className="primary" onClick={() => setForm({ email: "", password: "", role: "rh", cpf: "" })}>
             Novo usuário
@@ -331,6 +342,27 @@ export function Users() {
             <button className="ghost" type="button" onClick={() => setForm(null)}>Cancelar</button>
           </div>
         </form>
+      )}
+
+      {pending && pending.length > 0 && (
+        <section className="card soft">
+          <h2>Liberados pelo Bubble, aguardando o primeiro acesso</h2>
+          <p className="muted small">
+            Cada um entra no portal em "Primeiro acesso de funcionário" com o e-mail, o CPF e a senha de ponto. Quem
+            ainda não tem senha de ponto precisa criá-la antes no tablet.
+          </p>
+          <table>
+            <tbody>
+              {pending.map((p) => (
+                <tr key={p.cpf}>
+                  <td className="strong">{p.name}</td>
+                  <td>{p.email || <span className="muted">Sem e-mail no cadastro</span>}</td>
+                  <td><Badge tone={p.role === "admin" ? "ok" : "neutral"}>{ROLE_LABEL[p.role]}</Badge></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
       )}
 
       <section className="card flush">

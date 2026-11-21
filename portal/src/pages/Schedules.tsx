@@ -172,13 +172,11 @@ export default function Schedules({ me }: { me: Me }) {
           </div>
         )}
       </section>
-
-      <Holidays />
     </>
   );
 }
 
-function Holidays() {
+export function Holidays() {
   const [year, setYear] = useState(new Date().getFullYear());
   const { data, error, reload } = useLoad(() => rpc<Holiday[]>("portal_holidays", { p_year: year }), [year]);
   const [form, setForm] = useState({ date: "", reason: "" });
@@ -209,16 +207,17 @@ function Holidays() {
   };
 
   return (
+    <>
+    <PageHead title="Feriados" lead="Valem para todos os funcionários: o dia não conta como previsto e quem trabalhar ganha as horas." />
     <section className="card">
       <div className="card-head">
-        <h2>Feriados</h2>
+        <h2>{year}</h2>
         <div className="row">
           <button className="ghost small" onClick={() => setYear(year - 1)}>{year - 1}</button>
           <span className="strong">{year}</span>
           <button className="ghost small" onClick={() => setYear(year + 1)}>{year + 1}</button>
         </div>
       </div>
-      <p className="muted small">Valem para todos os funcionários: o dia não conta como previsto e quem trabalhar ganha as horas.</p>
       {(error || msg) && <Banner tone="error">{error || msg}</Banner>}
       <form className="inline-form" onSubmit={add}>
         <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} required />
@@ -239,5 +238,6 @@ function Holidays() {
         </table>
       )}
     </section>
+    </>
   );
 }

@@ -139,6 +139,13 @@ export function Employees() {
                     <td>
                       <div className="strong">{e.name}</div>
                       {e.email && <div className="muted small">{e.email}</div>}
+                      {(e.portal_role || e.tablet_responsible) && (
+                        <div className="chips tight">
+                          {e.portal_role === "admin" && <Badge tone="ok">Administrador</Badge>}
+                          {e.portal_role === "rh" && <Badge tone="neutral">RH</Badge>}
+                          {e.tablet_responsible && <Badge tone="neutral">Responsável pelo tablet</Badge>}
+                        </div>
+                      )}
                     </td>
                     <td className="nowrap">{formatCpf(e.cpf)}</td>
                     <td>{e.sites.length ? e.sites.join(", ") : <span className="muted">Todas</span>}</td>
