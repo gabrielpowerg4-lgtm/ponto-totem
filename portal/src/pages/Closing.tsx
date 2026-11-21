@@ -144,7 +144,7 @@ export default function Closing({ me, openTreatment }: { me: Me; openTreatment: 
         </div>
       </div>
       {me.cpf.length !== 11 && !period?.closed && (
-        <Banner tone="warn">Informe o seu CPF em Minha conta para fechar o período.</Banner>
+        <Banner tone="warn">Para fechar o período é preciso o seu CPF: não achamos um funcionário com o seu e-mail de acesso. Veja em Minha conta.</Banner>
       )}
 
       {!data ? (error ? null : <Loading />) : (

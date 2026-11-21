@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   createPortalUser, errorText, formatCpf, formatDateTime, formatEmployerId, rpc, supabase,
-  type Company, type Me, type PortalUser, type Role,
+  type Company, type Employee, type Me, type PortalUser, type Role,
 } from "../api";
 import { Badge, Banner, Empty, Loading, PageHead, useLoad } from "../ui";
 
@@ -56,8 +56,8 @@ export function CompanyPage({ me, goAccount }: { me: Me; goAccount: () => void }
       />
       {needsCpf && (
         <Banner tone="warn">
-          Para alterar estes dados, informe antes o seu CPF: a Portaria 671 exige o CPF de quem altera a
-          identificação do empregador.{" "}
+          Para alterar estes dados é preciso o seu CPF (a Portaria 671 exige o CPF de quem altera a identificação
+          do empregador) e não achamos um funcionário com o seu e-mail de acesso.{" "}
           <button className="link inline" onClick={goAccount}>Ir para Minha conta</button>
         </Banner>
       )}
@@ -219,6 +219,9 @@ const ROLE_LABEL: Record<Role, string> = { admin: "Administrador", rh: "RH" };
 
 export function Users() {
   const { data, error, reload, setData } = useLoad(() => rpc<PortalUser[]>("portal_users_list"));
+  const { data: employees } = useLoad(() => rpc<Employee[]>("portal_employees"));
+  const withEmail = (employees ?? []).filter((e) => e.active && e.email);
+  const matched = (email: string) => withEmail.find((e) => e.email.toLowerCase() === email.trim().toLowerCase());
   const [form, setForm] = useState<{ email: string; password: string; role: Role; cpf: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
@@ -268,8 +271,27 @@ export function Users() {
           <h2>Novo usuário</h2>
           <div className="grid-2">
             <label>
-              E-mail
-              <input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required />
+              Funcionário ou e-mail
+              <input
+                type="text"
+                list="user-employees"
+                value={form.email}
+                placeholder="Busque pelo nome ou digite o e-mail"
+                onChange={(e) => {
+                  const v = e.target.value;
+                  const pick = withEmail.find((x) => `${x.name} · ${x.email}` === v);
+                  setForm({ ...form, email: pick ? pick.email : v });
+                }}
+                required
+              />
+              <datalist id="user-employees">
+                {withEmail.map((x) => <option key={x.cpf} value={`${x.name} · ${x.email}`} />)}
+              </datalist>
+              <span className="hint">
+                {matched(form.email)
+                  ? `${matched(form.email)!.name} · CPF ${formatCpf(matched(form.email)!.cpf)} (vem do cadastro)`
+                  : "Use o e-mail do cadastro do funcionário para o CPF vir automaticamente."}
+              </span>
             </label>
             <label>
               Senha temporária
@@ -292,15 +314,17 @@ export function Users() {
                 <option value="admin">Administrador</option>
               </select>
             </label>
-            <label>
-              CPF (opcional)
-              <input
-                inputMode="numeric"
-                value={form.cpf}
-                placeholder="11 números"
-                onChange={(e) => setForm({ ...form, cpf: onlyDigits(e.target.value, 11) })}
-              />
-            </label>
+            {!matched(form.email) && (
+              <label>
+                CPF (se não for funcionário)
+                <input
+                  inputMode="numeric"
+                  value={form.cpf}
+                  placeholder="11 números"
+                  onChange={(e) => setForm({ ...form, cpf: onlyDigits(e.target.value, 11) })}
+                />
+              </label>
+            )}
           </div>
           <div className="row">
             <button className="primary" disabled={busy} type="submit">{busy ? "Criando" : "Criar usuário"}</button>
@@ -327,7 +351,10 @@ export function Users() {
                   <tr key={u.user_id}>
                     <td className="strong">{u.email}{u.is_me && <span className="muted"> (você)</span>}</td>
                     <td><Badge tone={u.role === "admin" ? "ok" : "neutral"}>{ROLE_LABEL[u.role]}</Badge></td>
-                    <td>{u.cpf ? formatCpf(u.cpf) : <span className="muted">Não informado</span>}</td>
+                    <td>
+                      {u.cpf ? formatCpf(u.cpf) : <span className="muted">Não informado</span>}
+                      {u.employee_name && <div className="muted small">{u.employee_name}</div>}
+                    </td>
                     <td>{formatDateTime(u.last_sign_in_at)}</td>
                     <td className="right">
                       {!u.is_me && <button className="ghost small danger" onClick={() => remove(u)}>Remover</button>}
@@ -383,16 +410,30 @@ export function Account({ me, onChanged }: { me: Me; onChanged: () => void }) {
   return (
     <>
       <PageHead title="Minha conta" lead={`${me.email} · ${ROLE_LABEL[me.role]}`} />
-      <form className="card form narrow" onSubmit={saveCpf}>
-        <h2>CPF</h2>
-        <p className="muted small">Fica registrado quando você altera os dados do empregador e, nas próximas etapas, nos tratamentos.</p>
-        <label>
-          CPF
-          <input inputMode="numeric" value={cpf} placeholder="11 números" onChange={(e) => setCpf(onlyDigits(e.target.value, 11))} required />
-        </label>
-        {cpfMsg && <Banner tone={cpfMsg.tone}>{cpfMsg.text}</Banner>}
-        <button className="primary" disabled={busy === "cpf"} type="submit">Salvar CPF</button>
-      </form>
+      {me.cpf_source === "funcionario" ? (
+        <section className="card form narrow">
+          <h2>CPF</h2>
+          <p className="strong">{formatCpf(me.cpf)}</p>
+          <p className="muted small">
+            Vem do seu cadastro de funcionário ({me.employee_name}), ligado pelo e-mail de acesso. Fica registrado
+            nos tratamentos, no fechamento e nas alterações da empresa.
+          </p>
+        </section>
+      ) : (
+        <form className="card form narrow" onSubmit={saveCpf}>
+          <h2>CPF</h2>
+          <p className="muted small">
+            Não achamos um funcionário ativo com o e-mail {me.email}. Se você é funcionário, cadastre este e-mail
+            no Bubble e o CPF passa a vir de lá. Se não é, informe o CPF aqui.
+          </p>
+          <label>
+            CPF
+            <input inputMode="numeric" value={cpf} placeholder="11 números" onChange={(e) => setCpf(onlyDigits(e.target.value, 11))} required />
+          </label>
+          {cpfMsg && <Banner tone={cpfMsg.tone}>{cpfMsg.text}</Banner>}
+          <button className="primary" disabled={busy === "cpf"} type="submit">Salvar CPF</button>
+        </form>
+      )}
 
       <form className="card form narrow" onSubmit={savePassword}>
         <h2>Trocar senha</h2>

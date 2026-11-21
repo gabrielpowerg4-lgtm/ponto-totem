@@ -21,6 +21,8 @@ export type Me = {
   email: string;
   role: Role;
   cpf: string;
+  cpf_source: "funcionario" | "manual" | "nenhum";
+  employee_name: string | null;
   company: string;
   company_id: string;
   legal_name: string;
@@ -122,6 +124,8 @@ export type PortalUser = {
   email: string;
   role: Role;
   cpf: string;
+  cpf_source: "funcionario" | "manual" | "nenhum";
+  employee_name: string | null;
   created_at: string;
   last_sign_in_at: string | null;
   is_me: boolean;

@@ -128,7 +128,8 @@ export default function Treatment({ me, goAccount }: { me: Me; goAccount: () => 
       />
       {needsCpf && (
         <Banner tone="warn">
-          Para tratar o ponto, informe antes o seu CPF: ele fica registrado em cada ajuste.{" "}
+          Para tratar o ponto é preciso o seu CPF (fica registrado em cada ajuste) e não achamos um funcionário
+          com o seu e-mail de acesso.{" "}
           <button className="link inline" onClick={goAccount}>Ir para Minha conta</button>
         </Banner>
       )}
