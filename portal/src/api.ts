@@ -11,67 +11,247 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
   auth: { persistSession: true, autoRefreshToken: true },
 });
 
+// ---------------------------------------------------------------------------
+// Tipos
+// ---------------------------------------------------------------------------
+
+export type Role = "admin" | "rh";
+
 export type Me = {
   email: string;
-  role: "admin" | "rh";
+  role: Role;
+  cpf: string;
   company: string;
   company_id: string;
   legal_name: string;
   employer_id: string;
+  timezone: string;
   has_integration_key: boolean;
-};
-
-export type Terminal = {
-  code: string;
-  site: string;
-  responsible: string;
-  model: string;
-  last_seen_at: string | null;
 };
 
 export type Summary = {
   employees: number;
   employees_without_pin: number;
   sites: number;
-  terminals: Terminal[];
+  terminals: { code: string; site: string; responsible: string; model: string; last_seen_at: string | null }[];
   punches_total: number;
   punches_today: number;
   last_punch_at: string | null;
   last_nsr: number;
 };
 
-export async function rpc<T>(name: string): Promise<T> {
-  const { data, error } = await supabase.rpc(name);
+export type Company = {
+  name: string;
+  id_type: 1 | 2;
+  employer_id: string;
+  legal_name: string;
+  caepf: string;
+  default_responsible_cpf: string;
+  timezone: string;
+  last_nsr: number;
+  inpi_number: string;
+  dev_id: string;
+  dev_name: string;
+};
+
+export type Site = { id: string; name: string; cno: string; address: string; employees: number; terminals: number };
+
+export type Employee = {
+  cpf: string;
+  name: string;
+  email: string;
+  active: boolean;
+  has_pin: boolean;
+  external_id: string;
+  updated_at: string;
+  sites: string[];
+  last_punch_at: string | null;
+};
+
+export type Terminal = {
+  id: string;
+  code: string;
+  site: string;
+  responsible: string;
+  model: string;
+  os: string;
+  app_version: string;
+  active: boolean;
+  created_at: string;
+  last_seen_at: string | null;
+  deactivated_at: string | null;
+  punches: number;
+  last_punch_at: string | null;
+};
+
+export type Punch = {
+  nsr: number;
+  cpf: string;
+  name: string;
+  marked_at: string;
+  recorded_at: string;
+  online: boolean;
+  face_status: string;
+  terminal: string;
+  site: string;
+  lat: number | null;
+  lng: number | null;
+  accuracy_m: number | null;
+  hash: string;
+};
+
+export type PunchFilter = {
+  from: string;
+  to: string;
+  cpf?: string;
+  terminal_id?: string;
+  site_id?: string;
+  online?: string;
+  face?: string;
+  limit?: number;
+  offset?: number;
+};
+
+export type PortalUser = {
+  user_id: string;
+  email: string;
+  role: Role;
+  cpf: string;
+  created_at: string;
+  last_sign_in_at: string | null;
+  is_me: boolean;
+};
+
+// ---------------------------------------------------------------------------
+// Chamadas
+// ---------------------------------------------------------------------------
+
+const ERRORS: Record<string, string> = {
+  not_allowed: "Somente o administrador pode fazer isso.",
+  cpf_required: "Informe o seu CPF em Minha conta antes de alterar os dados da empresa.",
+  invalid_cpf: "CPF inválido: informe os 11 números.",
+  invalid_employer_id: "CNPJ (14 números) ou CPF (11 números) do empregador inválido.",
+  invalid_caepf: "CAEPF inválido: informe os 14 números.",
+  invalid_cno: "CNO inválido: informe os 12 números.",
+  invalid_responsible_cpf: "CPF do responsável inválido: informe os 11 números.",
+  invalid_period: "Período inválido (máximo de 400 dias).",
+  missing_fields: "Preencha os campos obrigatórios.",
+  duplicate_name: "Já existe uma obra com este nome.",
+  not_found: "Registro não encontrado. Atualize a página.",
+  invalid_email: "Informe um e-mail válido.",
+  weak_password: "A senha precisa ter pelo menos 8 caracteres.",
+  email_exists: "Já existe uma conta com este e-mail.",
+  invalid_key: "Chave da empresa incorreta.",
+  admin_exists: "Esta empresa já tem um administrador. Peça acesso a ele.",
+};
+
+export function errorText(e: unknown, fallback = "Não foi possível concluir. Tente de novo."): string {
+  const msg = e instanceof Error ? e.message : String(e ?? "");
+  for (const [code, text] of Object.entries(ERRORS)) {
+    if (msg.includes(code)) return text;
+  }
+  return fallback;
+}
+
+export async function rpc<T>(name: string, args?: Record<string, unknown>): Promise<T> {
+  const { data, error } = await supabase.rpc(name, args);
   if (error) throw new Error(error.message);
   return data as T;
 }
 
-const SIGNUP_ERRORS: Record<string, string> = {
-  invalid_email: "Informe um e-mail válido.",
-  weak_password: "A senha precisa ter pelo menos 8 caracteres.",
-  invalid_key: "Chave da empresa incorreta.",
-  admin_exists: "Esta empresa já tem um administrador. Peça acesso a ele.",
-  email_exists: "Já existe uma conta com este e-mail. Use a tela de entrada.",
-};
-
-/** Primeiro acesso: cria o administrador da empresa, identificado pela chave da empresa. */
-export async function signupAdmin(email: string, password: string, companyKey: string): Promise<void> {
+async function post(path: string, body: unknown, auth: boolean): Promise<void> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (auth) {
+    const { data } = await supabase.auth.getSession();
+    headers.Authorization = `Bearer ${data.session?.access_token ?? ""}`;
+  }
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}/v1/portal/signup`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password, company_key: companyKey }),
-    });
+    res = await fetch(`${API_BASE}${path}`, { method: "POST", headers, body: JSON.stringify(body) });
   } catch {
     throw new Error("Não foi possível falar com o servidor.");
   }
   if (res.ok) return;
-  const body = await res.json().catch(() => ({}));
-  throw new Error(SIGNUP_ERRORS[body.error] ?? "Não foi possível criar a conta.");
+  const out = await res.json().catch(() => ({}));
+  throw new Error(String(out.error ?? "failed"));
+}
+
+/** Primeiro acesso: cria o administrador da empresa, identificado pela chave da empresa. */
+export async function signupAdmin(email: string, password: string, companyKey: string): Promise<void> {
+  try {
+    await post("/v1/portal/signup", { email, password, company_key: companyKey }, false);
+  } catch (e) {
+    throw new Error(errorText(e, "Não foi possível criar a conta."));
+  }
+}
+
+/** Administrador cria um usuario do portal (RH ou administrador). */
+export async function createPortalUser(u: { email: string; password: string; role: Role; cpf: string }) {
+  try {
+    await post("/v1/portal/users", u, true);
+  } catch (e) {
+    throw new Error(errorText(e, "Não foi possível criar o usuário."));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Formatos (no fuso da empresa)
+// ---------------------------------------------------------------------------
+
+let zone = "America/Sao_Paulo";
+export function setTimezone(tz: string) {
+  if (tz) zone = tz;
 }
 
 export function formatDateTime(value: string | null): string {
   if (!value) return "Nunca";
-  return new Date(value).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
+  return new Date(value).toLocaleString("pt-BR", { timeZone: zone, dateStyle: "short", timeStyle: "short" });
+}
+
+export function formatDate(value: string): string {
+  return new Date(value).toLocaleDateString("pt-BR", { timeZone: zone });
+}
+
+export function formatTime(value: string): string {
+  return new Date(value).toLocaleTimeString("pt-BR", { timeZone: zone, hour: "2-digit", minute: "2-digit" });
+}
+
+/** Data de hoje no fuso da empresa, no formato AAAA-MM-DD. */
+export function todayIso(): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: zone });
+}
+
+export function formatCpf(cpf: string): string {
+  const d = (cpf ?? "").replace(/\D/g, "");
+  return d.length === 11 ? `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}` : d;
+}
+
+export function formatEmployerId(id: string): string {
+  const d = (id ?? "").replace(/\D/g, "");
+  if (d.length === 14) return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12)}`;
+  return formatCpf(d);
+}
+
+export const FACE_LABEL: Record<string, string> = {
+  ROSTO_CONFERE: "Rosto conferiu",
+  VIVACIDADE_OK: "Pessoa real, sem foto de referência",
+  ROSTO_NAO_CONFERE: "Rosto não conferiu",
+  SEM_REFERENCIA: "Sem foto de referência",
+  SEM_VALIDACAO: "Sem validação facial",
+  CAMERA_INDISPONIVEL: "Câmera indisponível",
+};
+
+export const faceOk = (status: string) => status === "ROSTO_CONFERE" || status === "VIVACIDADE_OK";
+
+/** Baixa um texto como arquivo. */
+export function download(filename: string, content: string, type = "text/csv;charset=utf-8") {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

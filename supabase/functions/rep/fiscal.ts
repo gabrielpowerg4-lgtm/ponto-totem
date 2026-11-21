@@ -69,7 +69,7 @@ export function latin1Safe(text: string): string {
     if (code >= 32 && code <= 255 && !(code >= 127 && code < 160)) {
       out += ch;
     } else {
-      const plain = ch.normalize("NFD").replace(/[̀-ͯ]/g, "");
+      const plain = ch.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
       const c = plain.codePointAt(0) ?? 63;
       out += plain.length === 1 && c >= 32 && c < 127 ? plain : "?";
     }

@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { API_BASE, formatDateTime, rpc, signupAdmin, supabase, type Me, type Summary } from "./api";
+import { API_BASE, formatDateTime, rpc, setTimezone, signupAdmin, supabase, type Me, type Summary } from "./api";
+import { PageHead, Stat } from "./ui";
+import Punches from "./pages/Punches";
+import { Employees, Sites, Terminals } from "./pages/Registers";
+import { Account, CompanyPage, Users } from "./pages/Admin";
 
 type Theme = "light" | "dark";
 
@@ -169,22 +173,52 @@ function Auth({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void })
 // Portal
 // ---------------------------------------------------------------------------
 
-type Page = "home" | "integration";
+type Page = "home" | "punches" | "employees" | "sites" | "terminals" | "company" | "users" | "integration" | "account";
+
+const MENU: { page: Page; label: string; admin?: boolean; group: string }[] = [
+  { page: "home", label: "Início", group: "Ponto" },
+  { page: "punches", label: "Marcações", group: "Ponto" },
+  { page: "employees", label: "Funcionários", group: "Cadastros" },
+  { page: "sites", label: "Obras", group: "Cadastros" },
+  { page: "terminals", label: "Tablets", group: "Cadastros" },
+  { page: "company", label: "Empresa", group: "Configurações" },
+  { page: "users", label: "Usuários", admin: true, group: "Configurações" },
+  { page: "integration", label: "Integração", admin: true, group: "Configurações" },
+  { page: "account", label: "Minha conta", group: "Configurações" },
+];
+
+function pageFromHash(): Page {
+  const h = window.location.hash.replace("#", "") as Page;
+  return MENU.some((m) => m.page === h) ? h : "home";
+}
 
 function Portal({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void }) {
   const [me, setMe] = useState<Me | null>(null);
   const [denied, setDenied] = useState(false);
-  const [page, setPage] = useState<Page>("home");
+  const [page, setPageState] = useState<Page>(pageFromHash);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const loadMe = () =>
     rpc<Me | null>("portal_me")
-      .then((m) => (m ? setMe(m) : setDenied(true)))
+      .then((m) => {
+        if (!m) return setDenied(true);
+        setTimezone(m.timezone);
+        setMe(m);
+      })
       .catch(() => setDenied(true));
 
   useEffect(() => {
     loadMe();
+    const onHash = () => setPageState(pageFromHash());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
+  const go = (p: Page) => {
+    window.location.hash = p;
+    setPageState(p);
+    setMenuOpen(false);
+  };
   const signOut = () => supabase.auth.signOut();
 
   if (denied) {
@@ -197,38 +231,63 @@ function Portal({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void 
   }
   if (!me) return <div className="center muted">Carregando</div>;
 
+  const items = MENU.filter((m) => !m.admin || me.role === "admin");
+  const current = items.some((m) => m.page === page) ? page : "home";
+  const groups = [...new Set(items.map((m) => m.group))];
+
   return (
-    <div className="shell">
-      <header className="topbar">
+    <div className="layout">
+      <aside className={menuOpen ? "sidebar open" : "sidebar"}>
         <div className="brand">
           <Logo />
           <div>
             <div className="brand-name">{me.company}</div>
-            <div className="muted small">Ponto Totem · Portal</div>
+            <div className="muted small">Ponto Totem</div>
           </div>
         </div>
         <nav>
-          <button className={page === "home" ? "tab active" : "tab"} onClick={() => setPage("home")}>Início</button>
-          {me.role === "admin" && (
-            <button className={page === "integration" ? "tab active" : "tab"} onClick={() => setPage("integration")}>
-              Integração
-            </button>
-          )}
+          {groups.map((g) => (
+            <div key={g} className="nav-group">
+              <div className="nav-title">{g}</div>
+              {items.filter((m) => m.group === g).map((m) => (
+                <button key={m.page} className={current === m.page ? "nav-item active" : "nav-item"} onClick={() => go(m.page)}>
+                  {m.label}
+                </button>
+              ))}
+            </div>
+          ))}
         </nav>
-        <div className="topbar-right">
-          <span className="muted small">{me.email}</span>
-          <button className="ghost small" onClick={toggleTheme}>{theme === "dark" ? "Tema claro" : "Tema escuro"}</button>
-          <button className="ghost small" onClick={signOut}>Sair</button>
+        <div className="sidebar-foot">
+          <div className="muted small ellipsis">{me.email}</div>
+          <div className="row">
+            <button className="ghost small" onClick={toggleTheme}>{theme === "dark" ? "Tema claro" : "Tema escuro"}</button>
+            <button className="ghost small" onClick={signOut}>Sair</button>
+          </div>
         </div>
-      </header>
-      <main>
-        {page === "home" ? <Home /> : <Integration me={me} onChanged={loadMe} />}
-      </main>
+      </aside>
+      {menuOpen && <div className="scrim" onClick={() => setMenuOpen(false)} />}
+      <div className="content">
+        <header className="mobilebar">
+          <button className="ghost small" onClick={() => setMenuOpen(true)}>Menu</button>
+          <span className="strong">{items.find((m) => m.page === current)?.label}</span>
+        </header>
+        <main>
+          {current === "home" && <Home go={go} />}
+          {current === "punches" && <Punches />}
+          {current === "employees" && <Employees />}
+          {current === "sites" && <Sites me={me} />}
+          {current === "terminals" && <Terminals me={me} />}
+          {current === "company" && <CompanyPage me={me} goAccount={() => go("account")} />}
+          {current === "users" && <Users />}
+          {current === "integration" && <Integration me={me} onChanged={loadMe} />}
+          {current === "account" && <Account me={me} onChanged={loadMe} />}
+        </main>
+      </div>
     </div>
   );
 }
 
-function Home() {
+function Home({ go }: { go: (p: Page) => void }) {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [error, setError] = useState("");
 
@@ -241,8 +300,7 @@ function Home() {
 
   return (
     <>
-      <h1>Início</h1>
-      <p className="muted lead">Visão geral dos tablets, funcionários e marcações da empresa.</p>
+      <PageHead title="Início" lead="Visão geral dos tablets, funcionários e marcações da empresa." />
       <div className="stats">
         <Stat label="Marcações hoje" value={summary.punches_today} />
         <Stat label="Marcações no total" value={summary.punches_total} note={`Último NSR: ${summary.last_nsr}`} />
@@ -257,7 +315,7 @@ function Home() {
       <section className="card">
         <div className="card-head">
           <h2>Tablets</h2>
-          <span className="muted small">Última marcação: {formatDateTime(summary.last_punch_at)}</span>
+          <button className="link" onClick={() => go("terminals")}>Ver todos</button>
         </div>
         {summary.terminals.length === 0 ? (
           <p className="muted">Nenhum tablet vinculado.</p>
@@ -269,7 +327,6 @@ function Home() {
                   <th>Terminal</th>
                   <th>Obra</th>
                   <th>Responsável</th>
-                  <th>Aparelho</th>
                   <th>Última comunicação</th>
                 </tr>
               </thead>
@@ -279,7 +336,6 @@ function Home() {
                     <td className="strong">{t.code}</td>
                     <td>{t.site || <span className="muted">Sem obra</span>}</td>
                     <td>{t.responsible || <span className="muted">Não informado</span>}</td>
-                    <td>{t.model || <span className="muted">Não informado</span>}</td>
                     <td>{formatDateTime(t.last_seen_at)}</td>
                   </tr>
                 ))}
@@ -287,26 +343,17 @@ function Home() {
             </table>
           </div>
         )}
+        <p className="muted small">Última marcação: {formatDateTime(summary.last_punch_at)}</p>
       </section>
 
       <section className="card soft">
         <h2>Próximas etapas</h2>
         <p className="muted">
-          Consulta de marcações, tratamento, fechamento de período, Espelho de Ponto, AFD e AEJ chegam nas
-          próximas versões do portal.
+          Tratamento das marcações e fechamento do período, depois Espelho de Ponto, AFD e AEJ, e a API para o
+          Bubble e o n8n buscarem a jornada tratada.
         </p>
       </section>
     </>
-  );
-}
-
-function Stat({ label, value, note }: { label: string; value: number; note?: string }) {
-  return (
-    <div className="stat">
-      <div className="muted small">{label}</div>
-      <div className="stat-value">{value.toLocaleString("pt-BR")}</div>
-      {note && <div className="muted small">{note}</div>}
-    </div>
   );
 }
 
@@ -350,11 +397,10 @@ function Integration({ me, onChanged }: { me: Me; onChanged: () => void }) {
 
   return (
     <>
-      <h1>Integração</h1>
-      <p className="muted lead">
-        Chave usada pelo Bubble ou pelo n8n para cadastrar funcionários e, nas próximas etapas, buscar a jornada
-        tratada.
-      </p>
+      <PageHead
+        title="Integração"
+        lead="Chave usada pelo Bubble ou pelo n8n para cadastrar funcionários e, nas próximas etapas, buscar a jornada tratada."
+      />
 
       <section className="card">
         <h2>Chave de integração</h2>

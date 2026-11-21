@@ -159,6 +159,39 @@ Deno.serve(async (req: Request) => {
       return json(200, { ok: true });
     }
 
+    // Portal: administrador cria um usuario (RH ou administrador) da mesma empresa.
+    // Quem chama se identifica com o token de sessao do portal.
+    if (req.method === "POST" && path.endsWith("/v1/portal/users")) {
+      const header = req.headers.get("Authorization") ?? "";
+      const jwt = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+      const { data: caller } = await db.auth.getUser(jwt);
+      if (!caller?.user) return json(401, { error: "invalid_token" });
+      const body = await req.json();
+      const email = String(body.email ?? "").trim().toLowerCase();
+      const password = String(body.password ?? "");
+      const role = String(body.role ?? "rh");
+      const cpf = String(body.cpf ?? "").replace(/\D/g, "");
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return json(400, { error: "invalid_email" });
+      if (password.length < 8) return json(400, { error: "weak_password" });
+      if (role !== "admin" && role !== "rh") return json(400, { error: "missing_fields" });
+      if (cpf !== "" && cpf.length !== 11) return json(400, { error: "invalid_cpf" });
+      const { data: me } = await db.from("portal_users").select("role").eq("user_id", caller.user.id).maybeSingle();
+      if (me?.role !== "admin") return json(403, { error: "not_allowed" });
+      const created = await db.auth.admin.createUser({ email, password, email_confirm: true });
+      if (created.error || !created.data.user) {
+        const msg = created.error?.message ?? "";
+        return json(400, { error: /already|registered|exists/i.test(msg) ? "email_exists" : "signup_failed" });
+      }
+      const { error } = await db.rpc("portal_user_attach", {
+        p_admin: caller.user.id, p_user: created.data.user.id, p_role: role, p_cpf: cpf,
+      });
+      if (error) {
+        await db.auth.admin.deleteUser(created.data.user.id);
+        return failure(error);
+      }
+      return json(200, { ok: true });
+    }
+
     const tokenHash = await bearerHash(req);
     if (!tokenHash) return json(401, { error: "invalid_token" });
 
