@@ -36,7 +36,8 @@ data class Employee(
     val email: String,
     val active: Boolean,
     val hasFace: Boolean,
-    val faceAt: Long?
+    val faceAt: Long?,
+    val hasPin: Boolean = true
 )
 
 data class Punch(
@@ -407,7 +408,7 @@ class Repo(private val context: Context, private val settings: Settings) {
 
     // ---- Funcionarios -----------------------------------------------------
 
-    private val employeeColumns = "id, cpf, name, email, active, face_at"
+    private val employeeColumns = "id, cpf, name, email, active, face_at, (pin_hash <> '') AS has_pin"
 
     private fun readEmployee(c: android.database.Cursor): Employee {
         val faceAt = if (c.isNull(5)) null else c.getLong(5)
@@ -418,6 +419,7 @@ class Repo(private val context: Context, private val settings: Settings) {
             email = c.getString(3),
             active = c.getInt(4) == 1,
             hasFace = faceAt != null,
+            hasPin = c.getInt(6) == 1,
             faceAt = faceAt
         )
     }
@@ -449,7 +451,7 @@ class Repo(private val context: Context, private val settings: Settings) {
         ).use { c ->
             if (c.moveToFirst()) {
                 employee = readEmployee(c)
-                stored = c.getString(6)
+                stored = c.getString(7)
             }
         }
         val found = employee
@@ -968,11 +970,12 @@ class Repo(private val context: Context, private val settings: Settings) {
         val json = JSONObject(result.body)
         settings.apiToken = json.getString("terminal_token")
         settings.linkedCompany = json.getJSONObject("company").getString("name")
-        settings.linkedSite = json.getJSONObject("site").getString("name")
+        settings.linkedSite = json.optJSONObject("site")?.optString("name", "") ?: ""
         val serverTime = json.optLong("server_time_ms", 0L)
         if (serverTime > 0L) TrustedClock.anchor(serverTime)
-        audit(actor, "Terminal vinculado ao servidor", "${settings.linkedCompany} · ${settings.linkedSite}")
-        return "Terminal vinculado a ${settings.linkedCompany}, ${settings.linkedSite}."
+        val where = if (settings.linkedSite.isBlank()) "sem obra" else settings.linkedSite
+        audit(actor, "Terminal vinculado ao servidor", "${settings.linkedCompany} · $where")
+        return "Terminal vinculado a ${settings.linkedCompany}, $where."
     }
 
     /**

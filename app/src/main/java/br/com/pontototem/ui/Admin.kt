@@ -312,20 +312,12 @@ fun AdminScreen(state: AppState, onKioskChanged: (Boolean) -> Unit, onCloseApp: 
             modifier = Modifier.fillMaxWidth(),
             onClick = { state.screen = Screen.EMPLOYEES }
         )
-        if (isAdmin) {
-            VSpace(12)
-            SecondaryButton(
-                text = "Arquivos fiscais (AFD e AEJ)",
-                modifier = Modifier.fillMaxWidth(),
-                onClick = { state.screen = Screen.FISCAL }
-            )
-        }
 
         VSpace(24)
         SectionTitle("Status")
         Card {
             InfoRow("Empresa", settings.companyName)
-            InfoRow("Obra ou local", settings.siteName)
+            InfoRow("Obra ou local", settings.siteName.ifBlank { "Sem obra (todos os funcionários)" })
             InfoRow("Responsável", settings.responsibleName)
             InfoRow("Terminal", settings.terminalId)
             InfoRow("Conexão", if (state.online) "On-line" else "Off-line")
@@ -414,7 +406,10 @@ fun AdminScreen(state: AppState, onKioskChanged: (Boolean) -> Unit, onCloseApp: 
             SectionTitle("Configuração do terminal")
             Field("Empresa", company, { company = it })
             VSpace(12)
-            Field("Obra ou local de trabalho", site, { site = it })
+            Field(
+                "Obra ou local de trabalho (opcional)", site, { site = it },
+                supporting = "Ao mudar a obra, vincule o terminal de novo para o servidor registrar."
+            )
             VSpace(12)
             Field("Responsável pelo dispositivo", responsible, { responsible = it })
             VSpace(12)
@@ -461,7 +456,6 @@ fun AdminScreen(state: AppState, onKioskChanged: (Boolean) -> Unit, onCloseApp: 
                     configMessage = ""
                     configError = when {
                         company.isBlank() -> "Informe a empresa."
-                        site.isBlank() -> "Informe a obra ou o local de trabalho."
                         terminal.isBlank() -> "Informe o identificador do terminal."
                         apiUrl.isNotEmpty() && !apiUrl.startsWith("https://") ->
                             "O endereço do servidor deve começar com https://."

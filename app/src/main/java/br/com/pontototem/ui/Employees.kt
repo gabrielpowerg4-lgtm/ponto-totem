@@ -130,11 +130,20 @@ fun EmployeesScreen(state: AppState) {
                             color = colors.onSurfaceVariant
                         )
                     }
-                    Text(
-                        text = if (e.hasFace) "Foto cadastrada" else "Sem foto",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (e.hasFace) status.success else status.warning
-                    )
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(
+                            text = if (e.hasFace) "Foto cadastrada" else "Sem foto",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (e.hasFace) status.success else status.warning
+                        )
+                        if (!e.hasPin) {
+                            Text(
+                                text = "Sem senha de ponto",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = status.warning
+                            )
+                        }
+                    }
                 }
                 if (i < list.size - 1) HorizontalDivider(color = colors.outlineVariant)
             }

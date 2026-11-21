@@ -713,7 +713,7 @@ fun ReceiptScreen(state: AppState) {
             )
             VSpace(16)
             ReceiptRow("Empresa", punch.company)
-            ReceiptRow("Obra ou local", punch.site)
+            if (punch.site.isNotBlank()) ReceiptRow("Obra ou local", punch.site)
             ReceiptRow("Trabalhador", punch.name)
             ReceiptRow("CPF", Cpf.masked(punch.cpf))
             ReceiptRow("Data e hora", Fmt.dateTime(punch.markedAt) + " (UTC" + Fmt.zone() + ")")

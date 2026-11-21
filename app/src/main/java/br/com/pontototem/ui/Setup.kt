@@ -108,15 +108,18 @@ fun SetupScreen(state: AppState) {
         )
         VSpace(6)
         Text(
-            text = "Vincule este tablet à empresa e à obra. Todas as marcações feitas aqui " +
-                "ficam associadas a estes dados.",
+            text = "Vincule este tablet à empresa. A obra é opcional: informe quando o tablet " +
+                "ficar em uma obra ou frente de trabalho específica.",
             style = MaterialTheme.typography.bodyLarge,
             color = colors.onSurfaceVariant
         )
         VSpace(24)
         Field("Empresa", company, { company = it })
         VSpace(12)
-        Field("Obra ou local de trabalho", site, { site = it })
+        Field(
+            "Obra ou local de trabalho (opcional)", site, { site = it },
+            supporting = "Em branco, o tablet atende todos os funcionários da empresa."
+        )
         VSpace(12)
         Field("Responsável pelo dispositivo", responsible, { responsible = it })
         VSpace(12)
@@ -156,7 +159,6 @@ fun SetupScreen(state: AppState) {
             onClick = {
                 error = when {
                     company.isBlank() -> "Informe a empresa."
-                    site.isBlank() -> "Informe a obra ou o local de trabalho."
                     responsible.isBlank() -> "Informe o responsável pelo dispositivo."
                     terminal.isBlank() -> "Informe o identificador do terminal."
                     !isPin(adminPin) -> "A senha do administrador deve ter de 4 a 8 números."

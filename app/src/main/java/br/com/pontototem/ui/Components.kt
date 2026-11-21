@@ -57,7 +57,7 @@ import kotlinx.coroutines.delay
 
 enum class Screen {
     SETUP, HOME, PASSWORD, FACE, SUCCESS, RECEIPT, ERROR,
-    ADMIN_PIN, ADMIN, EMPLOYEES, EMPLOYEE_FORM, ENROLL, FACE_TEST, FISCAL
+    ADMIN_PIN, ADMIN, EMPLOYEES, EMPLOYEE_FORM, ENROLL, FACE_TEST
 }
 
 /** Estado da interface. Vive enquanto a Activity vive, inclusive ao girar a tela. */
