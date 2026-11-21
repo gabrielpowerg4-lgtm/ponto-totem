@@ -8,7 +8,12 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.runtime.remember
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -29,6 +34,7 @@ import br.com.pontototem.ui.SetupScreen
 import br.com.pontototem.ui.FaceScreen
 import br.com.pontototem.ui.HomeScreen
 import br.com.pontototem.ui.PasswordScreen
+import br.com.pontototem.ui.PinSetScreen
 import br.com.pontototem.ui.PontoTheme
 import br.com.pontototem.ui.ReceiptScreen
 import br.com.pontototem.ui.Screen
@@ -90,18 +96,43 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            // Area administrativa: encerra apos 2 minutos sem toque (fora da camera).
+            LaunchedEffect(Unit) {
+                while (true) {
+                    delay(5_000)
+                    val idle = System.currentTimeMillis() - state.lastActivity
+                    val adminScreens = setOf(Screen.ADMIN, Screen.EMPLOYEES, Screen.EMPLOYEE_FORM, Screen.PIN_SET)
+                    if (state.role.isNotEmpty() && state.screen in adminScreens && idle > 120_000) {
+                        withContext(Dispatchers.IO) { repo.audit(state.actor(), "Saída automática por inatividade", "") }
+                        state.goHome()
+                    }
+                }
+            }
+
             // O botao voltar nunca fecha o totem; apenas retorna ao inicio.
             BackHandler(enabled = true) {
                 when (state.screen) {
                     Screen.HOME, Screen.SETUP -> Unit
                     Screen.EMPLOYEES -> state.screen = Screen.ADMIN
                     Screen.EMPLOYEE_FORM -> state.screen = Screen.EMPLOYEES
-                    Screen.ENROLL, Screen.FACE_TEST -> state.screen = Screen.EMPLOYEE_FORM
+                    Screen.ENROLL, Screen.FACE_TEST, Screen.PIN_SET -> state.screen = Screen.EMPLOYEE_FORM
                     else -> state.goHome()
                 }
             }
 
             PontoTheme(mode = state.themeMode) {
+              Box(
+                  Modifier
+                      .fillMaxSize()
+                      .pointerInput(Unit) {
+                          awaitPointerEventScope {
+                              while (true) {
+                                  awaitPointerEvent(PointerEventPass.Initial)
+                                  state.lastActivity = System.currentTimeMillis()
+                              }
+                          }
+                      }
+              ) {
                 when (state.screen) {
                     Screen.SETUP -> SetupScreen(state)
                     Screen.EMPLOYEES -> EmployeesScreen(state)
@@ -115,6 +146,7 @@ class MainActivity : ComponentActivity() {
                     Screen.RECEIPT -> ReceiptScreen(state)
                     Screen.ERROR -> ErrorScreen(state)
                     Screen.ADMIN_PIN -> AdminPinScreen(state)
+                    Screen.PIN_SET -> PinSetScreen(state)
                     Screen.ADMIN -> AdminScreen(
                         state = state,
                         onKioskChanged = { on ->
@@ -126,6 +158,7 @@ class MainActivity : ComponentActivity() {
                         }
                     )
                 }
+              }
             }
         }
     }

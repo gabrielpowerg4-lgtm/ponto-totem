@@ -37,8 +37,15 @@ data class Employee(
     val active: Boolean,
     val hasFace: Boolean,
     val faceAt: Long?,
-    val hasPin: Boolean = true
+    val hasPin: Boolean = true,
+    /** Responsavel pelo tablet (vem do cadastro no Bubble). */
+    val responsible: Boolean = false,
+    /** Administrador do sistema (vem do cadastro no Bubble). */
+    val admin: Boolean = false
 )
+
+/** Aviso de campo do responsavel para o RH. */
+data class Notice(val id: String, val at: Long, val responsibleCpf: String, val employeeCpf: String, val text: String, val synced: Boolean)
 
 data class Punch(
     val id: String,
@@ -314,7 +321,7 @@ class Settings(context: Context) {
 // Banco local
 // ---------------------------------------------------------------------------
 
-private class Db(context: Context) : SQLiteOpenHelper(context, "ponto.db", null, 4) {
+private class Db(context: Context) : SQLiteOpenHelper(context, "ponto.db", null, 5) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -345,6 +352,26 @@ private class Db(context: Context) : SQLiteOpenHelper(context, "ponto.db", null,
         createV2(db)
         upgradeV3(db)
         upgradeV4(db)
+        upgradeV5(db)
+    }
+
+    /** V5: perfis vindos do servidor, acao pendente de envio e avisos de campo. */
+    private fun upgradeV5(db: SQLiteDatabase) {
+        db.execSQL("ALTER TABLE employees ADD COLUMN responsible INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE employees ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE employees ADD COLUMN pending_action TEXT")
+        db.execSQL("ALTER TABLE employees ADD COLUMN pending_reason TEXT")
+        db.execSQL("ALTER TABLE employees ADD COLUMN pending_resp TEXT")
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS notices (" +
+                "id TEXT PRIMARY KEY," +
+                "at INTEGER NOT NULL," +
+                "responsible_cpf TEXT NOT NULL," +
+                "employee_cpf TEXT NOT NULL," +
+                "day TEXT NOT NULL," +
+                "text TEXT NOT NULL," +
+                "synced INTEGER NOT NULL DEFAULT 0)"
+        )
     }
 
     /** V4: posicao do terminal no momento da marcacao. */
@@ -393,6 +420,7 @@ private class Db(context: Context) : SQLiteOpenHelper(context, "ponto.db", null,
         }
         if (oldVersion < 3) upgradeV3(db)
         if (oldVersion < 4) upgradeV4(db)
+        if (oldVersion < 5) upgradeV5(db)
     }
 }
 
@@ -408,7 +436,8 @@ class Repo(private val context: Context, private val settings: Settings) {
 
     // ---- Funcionarios -----------------------------------------------------
 
-    private val employeeColumns = "id, cpf, name, email, active, face_at, (pin_hash <> '') AS has_pin"
+    private val employeeColumns =
+        "id, cpf, name, email, active, face_at, (pin_hash <> '') AS has_pin, responsible, is_admin"
 
     private fun readEmployee(c: android.database.Cursor): Employee {
         val faceAt = if (c.isNull(5)) null else c.getLong(5)
@@ -420,7 +449,9 @@ class Repo(private val context: Context, private val settings: Settings) {
             active = c.getInt(4) == 1,
             hasFace = faceAt != null,
             hasPin = c.getInt(6) == 1,
-            faceAt = faceAt
+            faceAt = faceAt,
+            responsible = c.getInt(7) == 1,
+            admin = c.getInt(8) == 1
         )
     }
 
@@ -451,7 +482,7 @@ class Repo(private val context: Context, private val settings: Settings) {
         ).use { c ->
             if (c.moveToFirst()) {
                 employee = readEmployee(c)
-                stored = c.getString(7)
+                stored = c.getString(9)
             }
         }
         val found = employee
@@ -534,6 +565,116 @@ class Repo(private val context: Context, private val settings: Settings) {
         db.writableDatabase.update("employees", values, "id = ?", arrayOf(employeeId))
         val cpf = employee(employeeId)?.cpf ?: ""
         audit(actor, "Foto de referência capturada", Cpf.masked(cpf))
+    }
+
+    /**
+     * Registra quem fez e por que (senha ou rosto) para seguir ao servidor no proximo envio do
+     * cadastro: o CPF do responsavel vai para o AFD e o motivo para a auditoria.
+     */
+    @Synchronized
+    fun markEmployeeAction(employeeId: String, action: String, reason: String, responsibleCpf: String) {
+        val values = ContentValues().apply {
+            put("pending_action", action)
+            put("pending_reason", reason)
+            put("pending_resp", responsibleCpf)
+            put("updated_at", TrustedClock.now())
+        }
+        db.writableDatabase.update("employees", values, "id = ?", arrayOf(employeeId))
+    }
+
+    /** Define a senha de ponto (primeiro acesso ou redefinicao), digitada pelo proprio funcionario. */
+    @Synchronized
+    fun setPin(employeeId: String, pin: String, action: String, reason: String, responsibleCpf: String, actor: String) {
+        val values = ContentValues().apply {
+            put("pin_hash", Secrets.hash(pin))
+            put("pending_action", action)
+            put("pending_reason", reason)
+            put("pending_resp", responsibleCpf)
+            put("updated_at", TrustedClock.now())
+        }
+        db.writableDatabase.update("employees", values, "id = ?", arrayOf(employeeId))
+        val cpf = employee(employeeId)?.cpf ?: ""
+        audit(
+            actor,
+            if (action == "senha_definida") "Senha de ponto criada" else "Senha de ponto redefinida",
+            Cpf.masked(cpf) + (if (reason.isEmpty()) "" else " · $reason")
+        )
+    }
+
+    /** Marcacoes registradas hoje neste aparelho (consulta). */
+    fun todayPunches(): List<Punch> {
+        val cal = java.util.Calendar.getInstance()
+        cal.timeInMillis = TrustedClock.now()
+        cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+        cal.set(java.util.Calendar.MINUTE, 0)
+        cal.set(java.util.Calendar.SECOND, 0)
+        cal.set(java.util.Calendar.MILLISECOND, 0)
+        return punchesSince(cal.timeInMillis)
+    }
+
+    // ---- Avisos de campo ---------------------------------------------------
+
+    fun addNotice(responsibleCpf: String, employeeCpf: String, text: String, actor: String) {
+        val now = TrustedClock.now()
+        val day = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date(now))
+        val values = ContentValues().apply {
+            put("id", UUID.randomUUID().toString())
+            put("at", now)
+            put("responsible_cpf", responsibleCpf)
+            put("employee_cpf", employeeCpf)
+            put("day", day)
+            put("text", text)
+            put("synced", 0)
+        }
+        db.writableDatabase.insertOrThrow("notices", null, values)
+        audit(actor, "Aviso enviado ao RH", if (employeeCpf.isEmpty()) "" else Cpf.masked(employeeCpf))
+    }
+
+    fun notices(limit: Int): List<Notice> {
+        val out = ArrayList<Notice>()
+        db.readableDatabase.rawQuery(
+            "SELECT id, at, responsible_cpf, employee_cpf, text, synced FROM notices ORDER BY at DESC LIMIT $limit", null
+        ).use { c ->
+            while (c.moveToNext()) {
+                out.add(Notice(c.getString(0), c.getLong(1), c.getString(2), c.getString(3), c.getString(4), c.getInt(5) == 1))
+            }
+        }
+        return out
+    }
+
+    /** Envia os avisos ainda nao recebidos pelo servidor. */
+    @Synchronized
+    fun syncNotices() {
+        if (!settings.isLinked || !isOnline()) return
+        val list = JSONArray()
+        db.readableDatabase.rawQuery(
+            "SELECT id, responsible_cpf, employee_cpf, day, text FROM notices WHERE synced = 0 LIMIT 100", null
+        ).use { c ->
+            while (c.moveToNext()) {
+                val o = JSONObject()
+                o.put("client_id", c.getString(0))
+                o.put("responsible_cpf", c.getString(1))
+                o.put("employee_cpf", c.getString(2))
+                o.put("day", c.getString(3))
+                o.put("text", c.getString(4))
+                list.put(o)
+            }
+        }
+        if (list.length() == 0) return
+        try {
+            val body = JSONObject()
+            body.put("notices", list)
+            val result = call("POST", "/v1/notices", body, settings.apiToken)
+            if (result.code in 200..299) {
+                val wdb = db.writableDatabase
+                for (i in 0 until list.length()) {
+                    val values = ContentValues().apply { put("synced", 1) }
+                    wdb.update("notices", values, "id = ?", arrayOf(list.getJSONObject(i).getString("client_id")))
+                }
+            }
+        } catch (e: Exception) {
+            // Tenta de novo no proximo ciclo.
+        }
     }
 
     fun loadFace(employeeId: String): ByteArray? {
@@ -701,6 +842,16 @@ class Repo(private val context: Context, private val settings: Settings) {
         val out = ArrayList<Punch>()
         db.readableDatabase.rawQuery(
             "SELECT $punchColumns FROM punches ORDER BY seq DESC LIMIT $limit", null
+        ).use { c ->
+            while (c.moveToNext()) out.add(readPunch(c))
+        }
+        return out
+    }
+
+    fun punchesSince(fromMs: Long): List<Punch> {
+        val out = ArrayList<Punch>()
+        db.readableDatabase.rawQuery(
+            "SELECT $punchColumns FROM punches WHERE marked_at >= ? ORDER BY marked_at DESC", arrayOf(fromMs.toString())
         ).use { c ->
             while (c.moveToNext()) out.add(readPunch(c))
         }
@@ -986,13 +1137,14 @@ class Repo(private val context: Context, private val settings: Settings) {
     @Synchronized
     fun syncEmployees(manual: Boolean): Int {
         if (!settings.isLinked || !isOnline()) return 0
+        syncNotices()
         return try {
             // 1. Envia os cadastros alterados aqui.
             val changed = JSONArray()
             val sentIds = ArrayList<Pair<String, Long>>()
             db.readableDatabase.rawQuery(
-                "SELECT id, cpf, name, email, pin_hash, active, updated_at FROM employees " +
-                    "WHERE synced_at IS NULL OR updated_at > synced_at",
+                "SELECT id, cpf, name, email, pin_hash, active, updated_at, pending_action, pending_reason, " +
+                    "pending_resp FROM employees WHERE synced_at IS NULL OR updated_at > synced_at",
                 null
             ).use { c ->
                 while (c.moveToNext()) {
@@ -1003,6 +1155,9 @@ class Repo(private val context: Context, private val settings: Settings) {
                     o.put("pin_hash", c.getString(4))
                     o.put("active", c.getInt(5) == 1)
                     o.put("updated_at_ms", c.getLong(6))
+                    if (!c.isNull(7)) o.put("action", c.getString(7))
+                    if (!c.isNull(8)) o.put("reason", c.getString(8))
+                    if (!c.isNull(9)) o.put("responsible_cpf", c.getString(9))
                     changed.put(o)
                     sentIds.add(Pair(c.getString(0), c.getLong(6)))
                 }
@@ -1017,7 +1172,12 @@ class Repo(private val context: Context, private val settings: Settings) {
                 }
                 val wdb = db.writableDatabase
                 for ((id, updatedAt) in sentIds) {
-                    val values = ContentValues().apply { put("synced_at", updatedAt) }
+                    val values = ContentValues().apply {
+                        put("synced_at", updatedAt)
+                        putNull("pending_action")
+                        putNull("pending_reason")
+                        putNull("pending_resp")
+                    }
                     wdb.update("employees", values, "id = ? AND updated_at = ?", arrayOf(id, updatedAt.toString()))
                 }
             }
@@ -1065,6 +1225,12 @@ class Repo(private val context: Context, private val settings: Settings) {
                     wdb.update("employees", values, "id = ?", arrayOf(existing))
                     merged += 1
                 }
+                // Perfis mudam no Bubble sem mexer no cadastro: aplica sempre.
+                val roles = ContentValues().apply {
+                    put("responsible", if (e.optBoolean("responsible", false)) 1 else 0)
+                    put("is_admin", if (e.optBoolean("admin", false)) 1 else 0)
+                }
+                wdb.update("employees", roles, "cpf = ?", arrayOf(cpf))
             }
             if (manual || merged > 0 || changed.length() > 0) {
                 log(

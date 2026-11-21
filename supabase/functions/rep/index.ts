@@ -63,6 +63,30 @@ async function employeeFromBody(item: Record<string, unknown>): Promise<Record<s
   return out;
 }
 
+const hexToBytes = (h: string) => new Uint8Array((h.match(/../g) ?? []).map((x) => parseInt(x, 16)));
+
+/** Confere a senha de ponto contra o "sal:hash" guardado (mesmo formato do tablet). */
+async function verifyPin(pin: string, stored: string): Promise<boolean> {
+  const [saltHex, hashHex] = (stored ?? "").split(":");
+  if (!saltHex || !hashHex) return false;
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveBits"]);
+  const bits = new Uint8Array(await crypto.subtle.deriveBits(
+    { name: "PBKDF2", hash: "SHA-256", salt: hexToBytes(saltHex), iterations: 120_000 },
+    key,
+    256,
+  ));
+  const expected = hexToBytes(hashHex);
+  if (expected.length !== bits.length) return false;
+  let diff = 0;
+  for (let i = 0; i < bits.length; i++) diff |= bits[i] ^ expected[i];
+  return diff === 0;
+}
+
+function parseBool(v: unknown): boolean {
+  const s = String(v ?? "").trim().toLowerCase();
+  return !(s === "" || s === "false" || s === "nao" || s === "não" || s === "0" || s === "no");
+}
+
 async function sha256Hex(text: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
   return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -173,6 +197,51 @@ Deno.serve(async (req: Request) => {
       return json(200, { ok: true });
     }
 
+    // Portal: primeiro acesso de um funcionario que o Bubble liberou (perfil_portal).
+    // Sem servidor de e-mail, a identidade e confirmada com e-mail + CPF + senha de ponto.
+    if (req.method === "POST" && path.endsWith("/v1/portal/first-access")) {
+      const body = await req.json();
+      const email = String(body.email ?? "").trim().toLowerCase();
+      const cpf = String(body.cpf ?? "").replace(/\D/g, "");
+      const pin = String(body.pin ?? "");
+      const password = String(body.password ?? "");
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return json(400, { error: "invalid_email" });
+      if (cpf.length !== 11) return json(400, { error: "invalid_cpf" });
+      if (password.length < 8) return json(400, { error: "weak_password" });
+      const since = new Date(Date.now() - 3600_000).toISOString();
+      const { count: fails } = await db.from("portal_access_attempts").select("id", { count: "exact", head: true })
+        .eq("cpf", cpf).eq("ok", false).gte("at", since);
+      if ((fails ?? 0) >= 5) return json(429, { error: "too_many_attempts" });
+      const { data: rows } = await db.from("employees")
+        .select("company_id, cpf, name, email, pin_hash, portal_role, active").eq("cpf", cpf);
+      const emp = (rows ?? []).find((e) => e.active && e.portal_role !== "" && (e.email ?? "").toLowerCase() === email);
+      const ok = !!emp && emp.pin_hash !== "" && /^\d{4,8}$/.test(pin) && await verifyPin(pin, emp.pin_hash);
+      await db.from("portal_access_attempts").insert({ cpf, ok });
+      if (!ok || !emp) return json(403, { error: "not_recognized" });
+      const { data: existing } = await db.from("portal_users").select("user_id").eq("company_id", emp.company_id)
+        .eq("cpf", cpf).maybeSingle();
+      let userId = (await db.rpc("rep_auth_user_by_email", { p_email: email })).data as string | null;
+      if (userId) {
+        const { data: linked } = await db.from("portal_users").select("user_id").eq("user_id", userId).maybeSingle();
+        if (linked) return json(409, { error: "already_active" });
+        const up = await db.auth.admin.updateUserById(userId, { password, email_confirm: true });
+        if (up.error) return json(400, { error: "signup_failed" });
+      } else {
+        const created = await db.auth.admin.createUser({ email, password, email_confirm: true });
+        if (created.error || !created.data.user) return json(400, { error: "signup_failed" });
+        userId = created.data.user.id;
+      }
+      if (existing && existing.user_id !== userId) return json(409, { error: "already_active" });
+      const { error } = await db.from("portal_users").insert({
+        user_id: userId, company_id: emp.company_id, role: emp.portal_role, cpf,
+      });
+      if (error) return json(400, { error: "signup_failed" });
+      await db.from("audit_log").insert({
+        actor: "portal:" + email, action: "primeiro_acesso_portal", detail: { cpf, role: emp.portal_role },
+      });
+      return json(200, { ok: true });
+    }
+
     // Portal: administrador cria um usuario (RH ou administrador) da mesma empresa.
     // Quem chama se identifica com o token de sessao do portal.
     if (req.method === "POST" && path.endsWith("/v1/portal/users")) {
@@ -274,6 +343,15 @@ Deno.serve(async (req: Request) => {
           } else {
             results.push(data);
           }
+          // Perfis: acesso ao portal (admin | rh) e responsavel pelo tablet.
+          const roles: Record<string, unknown> = {};
+          if (item && "perfil_portal" in item) roles.perfil_portal = String(item.perfil_portal ?? "").trim().toLowerCase();
+          if (item && "responsavel_tablet" in item) roles.responsavel_tablet = parseBool(item.responsavel_tablet);
+          if (Object.keys(roles).length > 0 && data?.operacao !== "erro") {
+            const r = await db.rpc("rep_int_set_roles", { p_key_hash: tokenHash, p_cpf: String(item?.cpf ?? ""), p_item: roles });
+            const last = results[results.length - 1] as Record<string, unknown>;
+            results[results.length - 1] = { ...last, perfis: r.error ? { erro: "erro" } : r.data };
+          }
         }
         return json(200, many ? { resultados: results } : results[0]);
       }
@@ -311,6 +389,19 @@ Deno.serve(async (req: Request) => {
         rejected: data.rejected,
         server_time_ms: now(),
       });
+    }
+
+    // Aviso de campo do responsavel do tablet para o RH.
+    if (req.method === "POST" && path.endsWith("/v1/notices")) {
+      const body = await req.json();
+      const notices = Array.isArray(body.notices) ? body.notices : [body];
+      const ids: string[] = [];
+      for (const n of notices.slice(0, 100)) {
+        const { data, error } = await db.rpc("rep_notice_add", { p_token_hash: tokenHash, p: n ?? {} });
+        if (error) return failure(error);
+        ids.push(String(n?.client_id ?? data));
+      }
+      return json(200, { accepted: ids, server_time_ms: now() });
     }
 
     // Funcionarios autorizados na obra deste terminal.

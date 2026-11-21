@@ -50,6 +50,7 @@ import android.graphics.Bitmap
 import br.com.pontototem.data.FaceMatch
 import br.com.pontototem.data.FaceStatus
 import br.com.pontototem.data.Fmt
+import br.com.pontototem.data.Role
 import br.com.pontototem.face.FaceCamera
 import br.com.pontototem.face.FaceSample
 import br.com.pontototem.face.hasAnyCamera
@@ -65,12 +66,20 @@ import kotlin.math.abs
 
 @Composable
 fun HomeScreen(state: AppState) {
+    val forAdmin = state.purpose == Purpose.ADMIN
+    if (forAdmin) {
+        // Entrada do responsavel: volta ao inicio sem uso.
+        LaunchedEffect(state.cpf) {
+            delay(30_000)
+            state.goHome()
+        }
+    }
     SplitLayout(
         left = {
             InfoPanel(
                 state = state,
                 onOpenAdmin = { state.screen = Screen.ADMIN_PIN },
-                showAdminButton = true
+                showAdminButton = !forAdmin
             )
         },
         right = {
@@ -79,7 +88,7 @@ fun HomeScreen(state: AppState) {
             val colors = MaterialTheme.colorScheme
 
             Text(
-                text = "Registrar ponto",
+                text = if (forAdmin) "Área do responsável" else "Registrar ponto",
                 style = MaterialTheme.typography.headlineMedium,
                 color = colors.onSurface
             )
@@ -110,17 +119,37 @@ fun HomeScreen(state: AppState) {
                 modifier = Modifier.weight(1f)
             )
             VSpace(16)
-            PrimaryButton(
-                text = "Avançar",
-                onClick = { state.screen = Screen.PASSWORD },
-                enabled = valid,
-                modifier = Modifier
-                    .widthIn(max = 420.dp)
-                    .fillMaxWidth()
-            )
+            if (forAdmin) {
+                Row(
+                    modifier = Modifier
+                        .widthIn(max = 420.dp)
+                        .fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    SecondaryButton(text = "Voltar", onClick = { state.goHome() }, modifier = Modifier.weight(1f))
+                    PrimaryButton(
+                        text = "Avançar",
+                        onClick = { state.screen = Screen.PASSWORD },
+                        enabled = valid,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            } else {
+                PrimaryButton(
+                    text = "Avançar",
+                    onClick = { state.screen = Screen.PASSWORD },
+                    enabled = valid,
+                    modifier = Modifier
+                        .widthIn(max = 420.dp)
+                        .fillMaxWidth()
+                )
+            }
             VSpace(10)
             Text(
-                text = if (state.employeeCount == 0) {
+                text = if (forAdmin) {
+                    "Use o seu CPF e a sua senha de ponto. Depois o tablet confere o seu rosto. " +
+                        "Nenhuma marcação é registrada."
+                } else if (state.employeeCount == 0) {
                     "Nenhum funcionário cadastrado neste terminal. Toque em Administração, " +
                         "entre com a senha e abra Funcionários da obra."
                 } else {
@@ -221,6 +250,13 @@ fun PasswordScreen(state: AppState) {
                                     "Não foi possível entrar",
                                     "CPF ou senha incorretos. Tente de novo ou procure o responsável da obra."
                                 )
+                            } else if (state.purpose == Purpose.ADMIN && !found.responsible && !found.admin) {
+                                state.repo.audit("Sistema", "Área do responsável negada", Cpf.masked(cpf))
+                                state.showError(
+                                    "Acesso não liberado",
+                                    "Seu cadastro não está marcado como responsável por este tablet. " +
+                                        "Peça ao RH para liberar no cadastro do Bubble."
+                                )
                             } else {
                                 state.employee = found
                                 state.screen = Screen.FACE
@@ -252,6 +288,45 @@ fun FaceScreen(state: AppState) {
     val employee = state.employee
     if (employee == null) {
         LaunchedEffect(Unit) { state.goHome() }
+        return
+    }
+    if (state.purpose == Purpose.ADMIN) {
+        FaceCheck(
+            greeting = "Olá, ${employee.name.substringBefore(' ')}",
+            unavailableDetail = "Sem câmera não é possível entrar na área do responsável.",
+            doneDetail = "Conferindo.",
+            onCancel = { state.goHome() },
+            verify = { frame -> state.repo.verifyFace(employee.id, frame) },
+            onResult = { faceStatus, _ ->
+                // Entra com o rosto conferido, ou so com a vivacidade se ainda nao ha foto de referencia.
+                val ok = faceStatus == FaceStatus.FACE_MATCH || faceStatus == FaceStatus.NO_REFERENCE ||
+                    faceStatus == FaceStatus.LIVENESS_OK
+                val role = if (employee.admin) Role.ADMIN else Role.MANAGER
+                scope.launch {
+                    withContext(Dispatchers.IO) {
+                        state.repo.audit(
+                            if (ok) "${Role.label(role)}: ${employee.name}" else "Sistema",
+                            if (ok) "Entrada na área do responsável" else "Área do responsável negada",
+                            Cpf.masked(employee.cpf) + " · " + FaceStatus.label(faceStatus)
+                        )
+                    }
+                    if (ok) {
+                        state.role = role
+                        state.actorCpf = employee.cpf
+                        state.actorName = employee.name
+                        state.employee = null
+                        state.cpf = ""
+                        state.lastActivity = System.currentTimeMillis()
+                        state.screen = Screen.ADMIN
+                    } else {
+                        state.showError(
+                            "Rosto não conferiu",
+                            "Não foi possível confirmar sua identidade. Tente de novo com boa iluminação."
+                        )
+                    }
+                }
+            }
+        )
         return
     }
     FaceCheck(

@@ -38,6 +38,7 @@ import androidx.core.content.ContextCompat
 import br.com.pontototem.data.Cpf
 import br.com.pontototem.data.Employee
 import br.com.pontototem.data.FaceStatus
+import br.com.pontototem.data.Role
 import java.util.Locale
 import br.com.pontototem.data.Fmt
 import br.com.pontototem.face.FaceCamera
@@ -57,11 +58,14 @@ import kotlin.math.abs
 fun EmployeesScreen(state: AppState) {
     val colors = MaterialTheme.colorScheme
     val status = LocalStatusColors.current
-    var list by remember { mutableStateOf(emptyList<Employee>()) }
+    var all by remember { mutableStateOf(emptyList<Employee>()) }
     var loaded by remember { mutableStateOf(false) }
+    var onlyPending by remember { mutableStateOf(true) }
+    val pendingCount = all.count { it.active && (!it.hasPin || !it.hasFace) }
+    val list = if (onlyPending && pendingCount > 0) all.filter { it.active && (!it.hasPin || !it.hasFace) } else all
 
     LaunchedEffect(Unit) {
-        list = withContext(Dispatchers.IO) { state.repo.employees() }
+        all = withContext(Dispatchers.IO) { state.repo.employees() }
         loaded = true
     }
 
@@ -82,16 +86,39 @@ fun EmployeesScreen(state: AppState) {
             SecondaryButton(text = "Voltar", onClick = { state.screen = Screen.ADMIN })
         }
         VSpace(16)
-        PrimaryButton(
-            text = "Cadastrar funcionário",
-            modifier = Modifier.fillMaxWidth(),
-            onClick = {
-                state.editingId = null
-                state.formMessage = ""
-                state.screen = Screen.EMPLOYEE_FORM
+        if (!state.settings.isLinked && state.role == Role.ADMIN) {
+            // Sem servidor, o cadastro e local. Vinculado, o cadastro vem so do Bubble.
+            PrimaryButton(
+                text = "Cadastrar funcionário",
+                modifier = Modifier.fillMaxWidth(),
+                onClick = {
+                    state.editingId = null
+                    state.formMessage = ""
+                    state.screen = Screen.EMPLOYEE_FORM
+                }
+            )
+            VSpace(16)
+        } else {
+            Text(
+                text = "O cadastro vem do sistema da empresa. Aqui você ajuda no primeiro acesso: " +
+                    "senha de ponto e rosto.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.onSurfaceVariant
+            )
+            VSpace(12)
+        }
+        if (pendingCount > 0) {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (onlyPending) {
+                    PrimaryButton(text = "Pendentes ($pendingCount)", onClick = {})
+                    SecondaryButton(text = "Todos (${all.size})", onClick = { onlyPending = false })
+                } else {
+                    SecondaryButton(text = "Pendentes ($pendingCount)", onClick = { onlyPending = true })
+                    PrimaryButton(text = "Todos (${all.size})", onClick = {})
+                }
             }
-        )
-        VSpace(20)
+            VSpace(12)
+        }
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -132,7 +159,7 @@ fun EmployeesScreen(state: AppState) {
                     }
                     Column(horizontalAlignment = Alignment.End) {
                         Text(
-                            text = if (e.hasFace) "Foto cadastrada" else "Sem foto",
+                            text = if (e.hasFace) "Rosto cadastrado" else "Sem rosto",
                             style = MaterialTheme.typography.labelMedium,
                             color = if (e.hasFace) status.success else status.warning
                         )
@@ -158,6 +185,146 @@ fun EmployeesScreen(state: AppState) {
 
 @Composable
 fun EmployeeFormScreen(state: AppState) {
+    if (state.settings.isLinked || state.editingId != null && state.role != Role.ADMIN) {
+        EmployeeAccessScreen(state)
+    } else {
+        LocalEmployeeForm(state)
+    }
+}
+
+/**
+ * Primeiro acesso do funcionario, com o responsavel ao lado: senha de ponto (digitada pelo
+ * proprio funcionario) e rosto. O nome e o CPF vem do cadastro da empresa e nao mudam aqui.
+ */
+@Composable
+fun EmployeeAccessScreen(state: AppState) {
+    val colors = MaterialTheme.colorScheme
+    val status = LocalStatusColors.current
+    var current by remember { mutableStateOf<Employee?>(null) }
+    var reason by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf("") }
+
+    LaunchedEffect(state.editingId) {
+        val id = state.editingId
+        current = if (id == null) null else withContext(Dispatchers.IO) { state.repo.employee(id) }
+    }
+    val e = current
+
+    FormPage {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = e?.name ?: "Funcionário",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = colors.onBackground
+                )
+                if (e != null) {
+                    Text(
+                        text = "CPF ${Cpf.masked(e.cpf)}" + (if (e.active) "" else " · desligado"),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = colors.onSurfaceVariant
+                    )
+                }
+            }
+            SecondaryButton(text = "Voltar", onClick = { state.screen = Screen.EMPLOYEES })
+        }
+        if (e == null) return@FormPage
+        VSpace(16)
+        if (state.formMessage.isNotEmpty()) {
+            Banner(
+                text = state.formMessage,
+                tone = if (state.formMessage.startsWith("Teste não")) status.warning else status.success
+            )
+            VSpace(12)
+        }
+        if (error.isNotEmpty()) {
+            Banner(text = error, tone = colors.error)
+            VSpace(12)
+        }
+        if (!e.active) {
+            Text(
+                text = "Funcionário desligado: não é possível liberar o acesso.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = colors.onSurfaceVariant
+            )
+            return@FormPage
+        }
+        val needsReason = e.hasPin || e.hasFace
+        if (needsReason) {
+            Field(
+                "Motivo (para redefinir a senha ou refazer o rosto)", reason, { reason = it.take(200) },
+                supporting = "Fica registrado com o seu CPF e o RH vê no portal."
+            )
+            VSpace(16)
+        }
+
+        Text(text = "Senha de ponto", style = MaterialTheme.typography.titleMedium, color = colors.onSurfaceVariant)
+        VSpace(6)
+        Text(
+            text = if (e.hasPin) "Já tem senha." else "Ainda sem senha: o funcionário cria agora.",
+            style = MaterialTheme.typography.bodyLarge,
+            color = if (e.hasPin) colors.onBackground else status.warning
+        )
+        VSpace(10)
+        PrimaryButton(
+            text = if (e.hasPin) "Redefinir senha" else "Criar senha de ponto",
+            modifier = Modifier.fillMaxWidth(),
+            onClick = {
+                if (e.hasPin && reason.trim().length < 3) {
+                    error = "Informe o motivo para redefinir a senha."
+                } else {
+                    error = ""
+                    state.pinAction = if (e.hasPin) "senha_redefinida" else "senha_definida"
+                    state.actionReason = reason.trim()
+                    state.formMessage = ""
+                    state.screen = Screen.PIN_SET
+                }
+            }
+        )
+
+        VSpace(24)
+        Text(text = "Reconhecimento facial", style = MaterialTheme.typography.titleMedium, color = colors.onSurfaceVariant)
+        VSpace(6)
+        val faceAt = e.faceAt
+        Text(
+            text = if (faceAt != null) "Rosto cadastrado em ${Fmt.dateTime(faceAt)}." else "Ainda sem rosto cadastrado.",
+            style = MaterialTheme.typography.bodyLarge,
+            color = if (faceAt != null) colors.onBackground else status.warning
+        )
+        VSpace(10)
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            PrimaryButton(
+                text = if (e.hasFace) "Refazer rosto" else "Cadastrar rosto",
+                onClick = {
+                    if (e.hasFace && reason.trim().length < 3) {
+                        error = "Informe o motivo para refazer o rosto."
+                    } else {
+                        error = ""
+                        state.pinAction = if (e.hasFace) "rosto_refeito" else "rosto_cadastrado"
+                        state.actionReason = reason.trim()
+                        state.formMessage = ""
+                        state.screen = Screen.ENROLL
+                    }
+                },
+                modifier = Modifier.weight(1f)
+            )
+            SecondaryButton(
+                text = "Testar reconhecimento",
+                enabled = e.hasFace,
+                onClick = {
+                    state.formMessage = ""
+                    state.screen = Screen.FACE_TEST
+                },
+                modifier = Modifier.weight(1f)
+            )
+        }
+        VSpace(24)
+    }
+}
+
+/** Cadastro local, so para tablet ainda nao vinculado ao servidor (demonstracao e testes). */
+@Composable
+fun LocalEmployeeForm(state: AppState) {
     val colors = MaterialTheme.colorScheme
     val status = LocalStatusColors.current
     val scope = rememberCoroutineScope()
@@ -440,7 +607,7 @@ fun EnrollScreen(state: AppState) {
         },
         second = {
             Text(
-                text = "Foto de referência",
+                text = "Cadastro do rosto",
                 style = MaterialTheme.typography.titleLarge,
                 color = colors.onSurfaceVariant
             )
@@ -487,7 +654,17 @@ fun EnrollScreen(state: AppState) {
                                 try {
                                     withContext(Dispatchers.IO) {
                                         state.repo.saveFace(employeeId, toJpeg(frame), actor)
+                                        if (state.actorCpf.isNotEmpty() || state.pinAction.startsWith("rosto")) {
+                                            state.repo.markEmployeeAction(
+                                                employeeId,
+                                                state.pinAction.ifEmpty { "rosto_cadastrado" },
+                                                state.actionReason,
+                                                state.actorCpf
+                                            )
+                                        }
                                     }
+                                    state.pinAction = ""
+                                    state.actionReason = ""
                                     state.formMessage = "Foto de referência registrada."
                                     state.screen = Screen.EMPLOYEE_FORM
                                 } catch (e: Exception) {
@@ -563,6 +740,131 @@ fun FaceTestScreen(state: AppState) {
                             ". Confira a iluminação e refaça."
                 }
                 state.screen = Screen.EMPLOYEE_FORM
+            }
+        }
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Senha de ponto digitada pelo proprio funcionario
+// ---------------------------------------------------------------------------
+
+@Composable
+fun PinSetScreen(state: AppState) {
+    val colors = MaterialTheme.colorScheme
+    val scope = rememberCoroutineScope()
+    val employeeId = state.editingId
+    if (employeeId == null) {
+        LaunchedEffect(Unit) { state.screen = Screen.EMPLOYEES }
+        return
+    }
+    var first by remember { mutableStateOf("") }
+    var pin by remember { mutableStateOf("") }
+    var confirming by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var name by remember { mutableStateOf("") }
+    LaunchedEffect(employeeId) {
+        name = withContext(Dispatchers.IO) { state.repo.employee(employeeId)?.name ?: "" }
+    }
+
+    SplitLayout(
+        left = {
+            Column(Modifier.padding(8.dp)) {
+                Text(
+                    text = "Entregue o tablet ao funcionário",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = colors.onBackground
+                )
+                VSpace(10)
+                Text(
+                    text = "Somente ${name.substringBefore(' ').ifEmpty { "o funcionário" }} deve digitar a senha. " +
+                        "Ela não aparece na tela e ninguém consegue vê-la depois, nem o RH.",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = colors.onSurfaceVariant
+                )
+            }
+        },
+        right = {
+            Text(
+                text = if (confirming) "Digite de novo" else "Crie sua senha de ponto",
+                style = MaterialTheme.typography.headlineMedium,
+                color = colors.onSurface
+            )
+            VSpace(4)
+            Text(
+                text = if (error.isNotEmpty()) error else "De 4 a 8 números",
+                style = MaterialTheme.typography.bodyLarge,
+                color = if (error.isNotEmpty()) colors.error else colors.onSurfaceVariant
+            )
+            VSpace(16)
+            Row(
+                modifier = Modifier.padding(vertical = 14.dp),
+                horizontalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                val slots = if (pin.length > 4) pin.length else 4
+                for (i in 0 until slots) {
+                    Box(
+                        Modifier
+                            .size(18.dp)
+                            .clip(androidx.compose.foundation.shape.CircleShape)
+                            .background(if (i < pin.length) colors.onSurface else colors.outline)
+                    )
+                }
+            }
+            VSpace(16)
+            Keypad(
+                onDigit = { d ->
+                    error = ""
+                    if (pin.length < 8) pin += d
+                },
+                onBackspace = { pin = pin.dropLast(1) },
+                onClear = { pin = "" },
+                modifier = Modifier.weight(1f)
+            )
+            VSpace(16)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                SecondaryButton(
+                    text = "Cancelar",
+                    onClick = { state.screen = Screen.EMPLOYEE_FORM },
+                    modifier = Modifier.weight(1f)
+                )
+                PrimaryButton(
+                    text = if (busy) "Salvando" else if (confirming) "Confirmar" else "Avançar",
+                    enabled = pin.length >= 4 && !busy,
+                    modifier = Modifier.weight(1f),
+                    onClick = {
+                        if (!confirming) {
+                            first = pin
+                            pin = ""
+                            confirming = true
+                        } else if (pin != first) {
+                            error = "As senhas não conferem. Comece de novo."
+                            pin = ""
+                            first = ""
+                            confirming = false
+                        } else {
+                            busy = true
+                            val typed = pin
+                            val actor = state.actor()
+                            scope.launch {
+                                withContext(Dispatchers.IO) {
+                                    state.repo.setPin(
+                                        employeeId, typed, state.pinAction.ifEmpty { "senha_definida" },
+                                        state.actionReason, state.actorCpf, actor
+                                    )
+                                }
+                                state.formMessage = "Senha de ponto salva. Devolva o tablet ao responsável."
+                                state.pinAction = ""
+                                state.actionReason = ""
+                                state.screen = Screen.EMPLOYEE_FORM
+                            }
+                        }
+                    }
+                )
             }
         }
     )

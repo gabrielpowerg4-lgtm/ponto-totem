@@ -35,6 +35,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import br.com.pontototem.data.AuditEntry
 import br.com.pontototem.data.Cpf
+import br.com.pontototem.data.Employee
+import br.com.pontototem.data.FaceStatus
+import br.com.pontototem.data.Notice
 import br.com.pontototem.data.Fmt
 import br.com.pontototem.data.LocationTracker
 import br.com.pontototem.data.Punch
@@ -75,9 +78,27 @@ fun AdminPinScreen(state: AppState) {
                 style = MaterialTheme.typography.headlineMedium,
                 color = colors.onSurface
             )
-            VSpace(4)
+            VSpace(12)
+            PrimaryButton(
+                text = "Entrar com CPF, senha e rosto",
+                onClick = {
+                    state.purpose = Purpose.ADMIN
+                    state.cpf = ""
+                    state.screen = Screen.HOME
+                },
+                modifier = Modifier
+                    .widthIn(max = 460.dp)
+                    .fillMaxWidth()
+            )
+            VSpace(6)
             Text(
-                text = if (wrong) "Senha incorreta" else "Digite sua senha de acesso",
+                text = "Para o responsável pelo tablet e o administrador.",
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.onSurfaceVariant
+            )
+            VSpace(20)
+            Text(
+                text = if (wrong) "Senha incorreta" else "Ou digite a senha técnica do administrador",
                 style = MaterialTheme.typography.bodyLarge,
                 color = if (wrong) colors.error else colors.onSurfaceVariant
             )
@@ -127,15 +148,12 @@ fun AdminPinScreen(state: AppState) {
                         scope.launch {
                             val role = withContext(Dispatchers.IO) {
                                 val settings = state.settings
-                                val found = when {
-                                    Secrets.verify(typed, settings.adminPinHash) -> Role.ADMIN
-                                    Secrets.verify(typed, settings.managerPinHash) -> Role.MANAGER
-                                    else -> ""
-                                }
+                                // Senha tecnica: so o administrador. O responsavel entra identificado.
+                                val found = if (Secrets.verify(typed, settings.adminPinHash)) Role.ADMIN else ""
                                 if (found.isEmpty()) {
                                     state.repo.audit("Sistema", "Acesso administrativo negado", "")
                                 } else {
-                                    state.repo.audit(Role.label(found), "Acesso administrativo", "")
+                                    state.repo.audit(Role.label(found) + " (senha técnica)", "Acesso administrativo", "")
                                 }
                                 found
                             }
@@ -145,6 +163,7 @@ fun AdminPinScreen(state: AppState) {
                                 pin = ""
                             } else {
                                 state.role = role
+                                state.lastActivity = System.currentTimeMillis()
                                 state.screen = Screen.ADMIN
                             }
                         }
@@ -178,6 +197,12 @@ fun AdminScreen(state: AppState, onKioskChanged: (Boolean) -> Unit, onCloseApp: 
     var employeeCount by remember { mutableIntStateOf(0) }
     var log by remember { mutableStateOf(emptyList<SyncEntry>()) }
     var punches by remember { mutableStateOf(emptyList<Punch>()) }
+    var today by remember { mutableStateOf(emptyList<Punch>()) }
+    var team by remember { mutableStateOf(emptyList<Employee>()) }
+    var notices by remember { mutableStateOf(emptyList<Notice>()) }
+    var noticeText by remember { mutableStateOf("") }
+    var noticeAbout by remember { mutableStateOf("") }
+    var noticeMessage by remember { mutableStateOf("") }
     var audit by remember { mutableStateOf(emptyList<AuditEntry>()) }
 
     var company by remember { mutableStateOf(settings.companyName) }
@@ -228,6 +253,9 @@ fun AdminScreen(state: AppState, onKioskChanged: (Boolean) -> Unit, onCloseApp: 
             val l = repo.syncLog(8)
             val p = repo.recentPunches(8)
             val a = repo.auditLog(30)
+            val td = repo.todayPunches()
+            val tm = repo.employees().filter { it.active }
+            val nt = repo.notices(5)
             val pending = repo.pendingCount()
             val online = repo.isOnline()
             withContext(Dispatchers.Main) {
@@ -236,6 +264,9 @@ fun AdminScreen(state: AppState, onKioskChanged: (Boolean) -> Unit, onCloseApp: 
                 log = l
                 punches = p
                 audit = a
+                today = td
+                team = tm
+                notices = nt
                 state.pending = pending
                 state.online = online
             }
@@ -298,7 +329,11 @@ fun AdminScreen(state: AppState, onKioskChanged: (Boolean) -> Unit, onCloseApp: 
                     color = colors.onBackground
                 )
                 Text(
-                    text = "Perfil: ${Role.label(state.role)}",
+                    text = if (state.actorName.isNotEmpty()) {
+                        "${state.actorName} · ${Role.label(state.role)}"
+                    } else {
+                        "Perfil: ${Role.label(state.role)} (senha técnica)"
+                    },
                     style = MaterialTheme.typography.bodyLarge,
                     color = colors.onSurfaceVariant
                 )
@@ -307,18 +342,106 @@ fun AdminScreen(state: AppState, onKioskChanged: (Boolean) -> Unit, onCloseApp: 
         }
 
         VSpace(20)
+        val pendingFirst = team.count { !it.hasPin || !it.hasFace }
         PrimaryButton(
-            text = "Funcionários da obra ($employeeCount)",
+            text = "Primeiro acesso e funcionários ($employeeCount)",
             modifier = Modifier.fillMaxWidth(),
             onClick = { state.screen = Screen.EMPLOYEES }
         )
+        if (pendingFirst > 0) {
+            VSpace(6)
+            Text(
+                text = "$pendingFirst funcionário(s) ainda sem senha de ponto ou sem rosto cadastrado.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = status.warning
+            )
+        }
+
+        VSpace(24)
+        SectionTitle("Quem marcou hoje")
+        val markedCpfs = today.map { it.cpf }.toSet()
+        val missing = team.filter { it.cpf !in markedCpfs }
+        Card {
+            InfoRow("Marcações hoje neste tablet", today.size.toString())
+            InfoRow("Funcionários que já marcaram", markedCpfs.size.toString())
+            InfoRow(
+                "Ainda não marcaram",
+                if (missing.isEmpty()) "Ninguém" else missing.take(12).joinToString(", ") { it.name.substringBefore(' ') } +
+                    (if (missing.size > 12) " e mais ${missing.size - 12}" else ""),
+                last = today.isEmpty()
+            )
+            for ((i, p) in today.take(10).withIndex()) {
+                InfoRow(
+                    Fmt.time(p.markedAt) + " · " + p.name.substringBefore(' '),
+                    (if (FaceStatus.isValidated(p.faceStatus)) "rosto ok" else "rosto não conferiu") +
+                        (if (p.online) "" else " · off-line"),
+                    last = i == minOf(today.size, 10) - 1
+                )
+            }
+        }
+
+        if (state.actorCpf.isNotEmpty()) {
+            VSpace(24)
+            SectionTitle("Avisar o RH")
+            Text(
+                text = "Algo que o RH precisa saber para tratar o ponto, por exemplo um funcionário que " +
+                    "chegou e não conseguiu marcar. O aviso aparece nas pendências do portal.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.onSurfaceVariant
+            )
+            VSpace(10)
+            Field(
+                "CPF do funcionário (opcional)", noticeAbout,
+                { noticeAbout = it.filter { c -> c.isDigit() }.take(11) },
+                keyboard = KeyboardType.Number
+            )
+            VSpace(10)
+            Field("O que aconteceu", noticeText, { noticeText = it.take(500) })
+            VSpace(10)
+            if (noticeMessage.isNotEmpty()) {
+                Banner(text = noticeMessage, tone = status.success)
+                VSpace(10)
+            }
+            PrimaryButton(
+                text = "Enviar aviso",
+                enabled = noticeText.trim().length >= 3 && (noticeAbout.isEmpty() || Cpf.isValid(noticeAbout)),
+                modifier = Modifier.fillMaxWidth(),
+                onClick = {
+                    val text = noticeText.trim()
+                    val about = noticeAbout
+                    val actor = state.actor()
+                    scope.launch {
+                        withContext(Dispatchers.IO) {
+                            state.repo.addNotice(state.actorCpf, about, text, actor)
+                            state.repo.syncNotices()
+                        }
+                        noticeText = ""
+                        noticeAbout = ""
+                        noticeMessage = "Aviso registrado. Ele segue para o RH assim que houver internet."
+                        refresh += 1
+                    }
+                }
+            )
+            if (notices.isNotEmpty()) {
+                VSpace(12)
+                Card {
+                    for ((i, n) in notices.withIndex()) {
+                        InfoRow(
+                            Fmt.dateTime(n.at),
+                            n.text + (if (n.synced) " · enviado" else " · aguardando internet"),
+                            last = i == notices.size - 1
+                        )
+                    }
+                }
+            }
+        }
 
         VSpace(24)
         SectionTitle("Status")
         Card {
             InfoRow("Empresa", settings.companyName)
             InfoRow("Obra ou local", settings.siteName.ifBlank { "Sem obra (todos os funcionários)" })
-            InfoRow("Responsável", settings.responsibleName)
+            InfoRow("Responsável cadastrado no vínculo", settings.responsibleName)
             InfoRow("Terminal", settings.terminalId)
             InfoRow("Conexão", if (state.online) "On-line" else "Off-line")
             val fix = LocationTracker.current()
@@ -430,16 +553,11 @@ fun AdminScreen(state: AppState, onKioskChanged: (Boolean) -> Unit, onCloseApp: 
             )
             VSpace(12)
             Field(
-                "Nova senha do administrador (opcional)", newAdminPin,
+                "Nova senha técnica do administrador (opcional)", newAdminPin,
                 { newAdminPin = it.filter { c -> c.isDigit() }.take(8) },
                 keyboard = KeyboardType.NumberPassword, secret = true
             )
-            VSpace(12)
-            Field(
-                "Nova senha do responsável da obra (opcional)", newManagerPin,
-                { newManagerPin = it.filter { c -> c.isDigit() }.take(8) },
-                keyboard = KeyboardType.NumberPassword, secret = true
-            )
+
             VSpace(12)
             if (configError.isNotEmpty()) {
                 Banner(text = configError, tone = colors.error)

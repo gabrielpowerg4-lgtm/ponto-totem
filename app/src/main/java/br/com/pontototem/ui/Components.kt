@@ -57,7 +57,13 @@ import kotlinx.coroutines.delay
 
 enum class Screen {
     SETUP, HOME, PASSWORD, FACE, SUCCESS, RECEIPT, ERROR,
-    ADMIN_PIN, ADMIN, EMPLOYEES, EMPLOYEE_FORM, ENROLL, FACE_TEST
+    ADMIN_PIN, ADMIN, EMPLOYEES, EMPLOYEE_FORM, ENROLL, FACE_TEST, PIN_SET
+}
+
+/** Para que o CPF, a senha e o rosto estao sendo pedidos. */
+object Purpose {
+    const val PUNCH = "punch"
+    const val ADMIN = "admin"
 }
 
 /** Estado da interface. Vive enquanto a Activity vive, inclusive ao girar a tela. */
@@ -81,9 +87,25 @@ class AppState(val repo: Repo, val settings: Settings) {
     var role by mutableStateOf("")
     var editingId by mutableStateOf<String?>(null)
     var formMessage by mutableStateOf("")
+    var purpose by mutableStateOf(Purpose.PUNCH)
+
+    /** Quem entrou na area administrativa com CPF, senha e rosto (vazio = senha tecnica). */
+    var actorCpf by mutableStateOf("")
+    var actorName by mutableStateOf("")
+
+    /** Acao em andamento na tela de senha: "senha_definida" ou "senha_redefinida", e o motivo. */
+    var pinAction by mutableStateOf("")
+    var actionReason by mutableStateOf("")
+
+    /** Ultimo toque na tela, para encerrar a area administrativa sem uso. */
+    var lastActivity by mutableStateOf(0L)
 
     /** Quem aparece na trilha de auditoria. */
-    fun actor(): String = if (role.isEmpty()) "Sistema" else Role.label(role)
+    fun actor(): String = when {
+        actorName.isNotEmpty() -> "${Role.label(role)}: $actorName"
+        role.isEmpty() -> "Sistema"
+        else -> Role.label(role) + " (senha técnica)"
+    }
 
     fun goHome() {
         cpf = ""
@@ -92,6 +114,11 @@ class AppState(val repo: Repo, val settings: Settings) {
         role = ""
         editingId = null
         formMessage = ""
+        purpose = Purpose.PUNCH
+        actorCpf = ""
+        actorName = ""
+        pinAction = ""
+        actionReason = ""
         screen = Screen.HOME
     }
 
@@ -393,9 +420,10 @@ fun PrimaryButton(
 }
 
 @Composable
-fun SecondaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun SecondaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
     OutlinedButton(
         onClick = onClick,
+        enabled = enabled,
         modifier = modifier.heightIn(min = 56.dp),
         shape = MaterialTheme.shapes.medium,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
