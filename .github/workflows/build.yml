@@ -3,6 +3,7 @@ name: Build APK
 on:
   push:
     branches: [main]
+    paths-ignore: ["portal/**", "supabase/**", "docs/**", ".github/workflows/portal.yml", "*.md"]
   workflow_dispatch:
 
 permissions:

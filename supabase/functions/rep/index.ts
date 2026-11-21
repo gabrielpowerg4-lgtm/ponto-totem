@@ -10,11 +10,56 @@ const db = createClient(
   { auth: { persistSession: false } },
 );
 
+const CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, apikey, content-type, x-client-info",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+};
+
 function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json; charset=utf-8" },
+    headers: { "Content-Type": "application/json; charset=utf-8", ...CORS },
   });
+}
+
+// Senha de ponto no mesmo formato do tablet: PBKDF2-SHA256, 120.000 iteracoes,
+// "sal:hash" em hexadecimal. A senha em texto nunca e guardada.
+async function hashPin(pin: string): Promise<string> {
+  const salt = new Uint8Array(16);
+  crypto.getRandomValues(salt);
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", hash: "SHA-256", salt, iterations: 120_000 },
+    key,
+    256,
+  );
+  const hex = (b: Uint8Array) => Array.from(b).map((x) => x.toString(16).padStart(2, "0")).join("");
+  return hex(salt) + ":" + hex(new Uint8Array(bits));
+}
+
+// Aceita os nomes de campo em portugues; "senha" vira hash antes de ir ao banco.
+async function employeeFromBody(item: Record<string, unknown>): Promise<Record<string, unknown> | string> {
+  const out: Record<string, unknown> = {
+    cpf: String(item.cpf ?? ""),
+    nome: String(item.nome ?? ""),
+  };
+  if (item.email !== undefined && item.email !== null) out.email = String(item.email);
+  if (item.ativo !== undefined && item.ativo !== null && item.ativo !== "") {
+    const v = String(item.ativo).toLowerCase();
+    out.ativo = !(v === "false" || v === "nao" || v === "não" || v === "0" || v === "no");
+  }
+  if (item.obra !== undefined && item.obra !== null) out.obra = String(item.obra);
+  if (item.id_externo !== undefined && item.id_externo !== null) out.id_externo = String(item.id_externo);
+  if (item.responsavel_cpf !== undefined && item.responsavel_cpf !== null) {
+    out.responsavel_cpf = String(item.responsavel_cpf);
+  }
+  const senha = item.senha === undefined || item.senha === null ? "" : String(item.senha);
+  if (senha !== "") {
+    if (!/^\d{4,8}$/.test(senha)) return "A senha de ponto deve ter de 4 a 8 números.";
+    out.pin_hash = await hashPin(senha);
+  }
+  return out;
 }
 
 async function sha256Hex(text: string): Promise<string> {
@@ -49,7 +94,7 @@ function failure(error: { message?: string } | null): Response {
   if (message.includes("invalid_key")) return json(403, { error: "invalid_key" });
   for (const code of [
     "missing_fields", "invalid_employer_id", "invalid_cno", "invalid_caepf",
-    "invalid_responsible_cpf", "invalid_schedule", "invalid_period",
+    "invalid_responsible_cpf", "invalid_schedule", "invalid_period", "not_allowed",
   ]) {
     if (message.includes(code)) return json(400, { error: code });
   }
@@ -60,6 +105,8 @@ function failure(error: { message?: string } | null): Response {
 Deno.serve(async (req: Request) => {
   const path = new URL(req.url).pathname.replace(/\/+$/, "");
   const now = () => Date.now();
+
+  if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
 
   try {
     // Hora do servidor, para ancorar o relogio do tablet.
@@ -85,8 +132,78 @@ Deno.serve(async (req: Request) => {
       return json(200, { ...data, terminal_token: token, server_time_ms: now() });
     }
 
+    // Portal: primeiro acesso do administrador, identificado pela chave da empresa.
+    if (req.method === "POST" && path.endsWith("/v1/portal/signup")) {
+      const body = await req.json();
+      const email = String(body.email ?? "").trim().toLowerCase();
+      const password = String(body.password ?? "");
+      const key = String(body.company_key ?? "").trim().toUpperCase();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return json(400, { error: "invalid_email" });
+      if (password.length < 8) return json(400, { error: "weak_password" });
+      const keyHash = await sha256Hex(key);
+      const { data: company } = await db.from("companies").select("id").eq("enroll_key_hash", keyHash).maybeSingle();
+      if (!company) return json(403, { error: "invalid_key" });
+      const { count } = await db.from("portal_users").select("user_id", { count: "exact", head: true })
+        .eq("company_id", company.id).eq("role", "admin");
+      if ((count ?? 0) > 0) return json(409, { error: "admin_exists" });
+      const created = await db.auth.admin.createUser({ email, password, email_confirm: true });
+      if (created.error || !created.data.user) {
+        const msg = created.error?.message ?? "";
+        return json(400, { error: /already|registered|exists/i.test(msg) ? "email_exists" : "signup_failed" });
+      }
+      const { error } = await db.rpc("portal_claim_admin", { p_user: created.data.user.id, p_key_hash: keyHash });
+      if (error) {
+        await db.auth.admin.deleteUser(created.data.user.id);
+        return failure(error);
+      }
+      return json(200, { ok: true });
+    }
+
     const tokenHash = await bearerHash(req);
     if (!tokenHash) return json(401, { error: "invalid_token" });
+
+    // ---- Integracao (Bubble ou n8n), autenticada pela chave de integracao ----
+
+    if (path.includes("/v1/integration/funcionarios")) {
+      if (req.method === "GET") {
+        const cpf = new URL(req.url).searchParams.get("cpf") ?? "";
+        const { data, error } = await db.rpc("rep_int_list_employees", { p_key_hash: tokenHash, p_cpf: cpf });
+        if (error) return failure(error);
+        return json(200, { funcionarios: data });
+      }
+      if (req.method === "POST") {
+        const body = await req.json();
+        const many = Array.isArray(body.funcionarios);
+        const items: Record<string, unknown>[] = many ? body.funcionarios : [body];
+        if (items.length > 500) return json(413, { error: "too_many" });
+        const results: unknown[] = [];
+        for (const item of items) {
+          const parsed = await employeeFromBody(item ?? {});
+          if (typeof parsed === "string") {
+            results.push({ cpf: String(item?.cpf ?? ""), operacao: "erro", erro: parsed });
+            continue;
+          }
+          const { data, error } = await db.rpc("rep_int_upsert_employee", { p_key_hash: tokenHash, p_item: parsed });
+          if (error) return failure(error);
+          results.push(data);
+        }
+        return json(200, many ? { resultados: results } : results[0]);
+      }
+    }
+
+    if (path.includes("/v1/integration/obras")) {
+      if (req.method === "GET") {
+        const { data, error } = await db.rpc("rep_int_list_sites", { p_key_hash: tokenHash });
+        if (error) return failure(error);
+        return json(200, { obras: data });
+      }
+      if (req.method === "POST") {
+        const body = await req.json();
+        const { data, error } = await db.rpc("rep_int_upsert_site", { p_key_hash: tokenHash, p_item: body ?? {} });
+        if (error) return failure(error);
+        return json(200, data);
+      }
+    }
 
     // Marcacoes: grava com NSR e hash encadeado; reenvios nao duplicam.
     if (req.method === "POST" && path.endsWith("/v1/punches")) {
