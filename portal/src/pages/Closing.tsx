@@ -28,7 +28,7 @@ export default function Closing({ me, openTreatment }: { me: Me; openTreatment: 
     setData(null);
     setError("");
     rpc<TimesheetData>("portal_timesheet", { p_from: period.start, p_to: period.end, p_cpf: "" })
-      .then(setData)
+      .then((d) => setData({ ...d, today: todayIso() }))
       .catch((e) => setError(errorText(e, "Não foi possível calcular o período.")));
   };
 

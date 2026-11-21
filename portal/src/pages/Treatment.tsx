@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  br, errorText, FACE_LABEL, formatCpf, rpc, WEEKDAY, type Employee, type Me, type Period,
+  br, errorText, FACE_LABEL, formatCpf, rpc, todayIso, WEEKDAY, type Employee, type Me, type Period,
 } from "../api";
 import {
   ALERTS, computeEmployee, FLAG_LABEL, fmtClock, fmtMin, OCCURRENCE_LABEL, type Day, type DayMark,
@@ -88,7 +88,7 @@ export default function Treatment({ me, goAccount }: { me: Me; goAccount: () => 
     if (!period || !cpf) return;
     setError("");
     rpc<TimesheetData>("portal_timesheet", { p_from: period.start, p_to: period.end, p_cpf: cpf })
-      .then(setData)
+      .then((d) => setData({ ...d, today: todayIso() }))
       .catch((e) => setError(errorText(e, "Não foi possível carregar o ponto.")));
   };
 
@@ -259,7 +259,7 @@ function DayRows({ day, open, toggle, readOnly, onChanged }: {
   const rest = day.expected_base === 0;
   return (
     <>
-      <tr className={(rest ? "rest " : "") + (open ? "open" : "")}>
+      <tr className={(rest ? "rest " : "") + (open ? "open " : "") + (day.future ? "future" : "")}>
         <td className="nowrap">
           <span className="strong">{br(day.date).slice(0, 5)}</span> <span className="muted">{WEEKDAY[day.weekday]}</span>
         </td>
@@ -278,7 +278,7 @@ function DayRows({ day, open, toggle, readOnly, onChanged }: {
             ))}
           </div>
         </td>
-        <td className="num">{day.expected ? fmtMin(day.expected) : <span className="muted">–</span>}</td>
+        <td className="num">{day.expected && !day.future ? fmtMin(day.expected) : <span className="muted">–</span>}</td>
         <td className="num">{day.worked ? fmtMin(day.worked) : <span className="muted">–</span>}</td>
         <td className="num">
           <Hours value={day.balance} signed />

@@ -57,6 +57,8 @@ export type TimesheetData = {
   marks: MarkData[];
   occurrences: Occurrence[];
   closed: { start: string; end: string; closed_at: string }[];
+  /** Data de hoje (AAAA-MM-DD). Dias depois dela nao contam como falta nem entram no saldo. */
+  today?: string;
 };
 
 export type DayMark = MarkData & { effective: boolean; at_min: number; next_day: boolean };
@@ -81,6 +83,7 @@ export type Day = {
   occurrences: Occurrence[];
   flags: string[];
   closed: boolean;
+  future: boolean;
 };
 
 export type Totals = {
@@ -270,21 +273,22 @@ export function computeEmployee(data: TimesheetData, emp: EmployeeData): Sheet {
     }
     const worked = workedReal + Math.round(night / 7);
 
+    const future = !!data.today && date > data.today;
     const flags: string[] = [];
-    if (!sch) flags.push("sem_jornada");
+    if (!sch && !future) flags.push("sem_jornada");
     if (eff.length % 2 === 1) flags.push("impar");
-    if (expected > 0 && eff.length === 0 && !falta) flags.push("sem_marcacao");
+    if (expected > 0 && eff.length === 0 && !falta && !future) flags.push("sem_marcacao");
     if (falta) flags.push("falta");
     if (eff.some((m) => m.kind === "O" && m.face && !FACE_OK.has(m.face))) flags.push("rosto");
     if (eff.some((m) => m.kind === "O" && m.online === false)) flags.push("offline");
-    if (expectedBase === 0 || fullDay) {
+    if (sch && (expectedBase === 0 || fullDay)) {
       if (worked > 0) flags.push("descanso_trabalhado");
     }
     if (marks.some((m) => m.kind === "I" || m.disregard) || occ.some((o) => o.cpf !== null)) flags.push("ajustado");
 
     // Tolerancia: mesmo numero de marcacoes que a jornada, cada uma ate tol_mark e no total ate tol_day.
     let tolerance = false;
-    let balance = worked - expected;
+    let balance = future && eff.length === 0 ? 0 : worked - expected;
     if (!fullDay && expected === expectedBase && exp.length > 0 && eff.length === exp.length) {
       const dev = eff.map((m, i) => Math.abs(m.at_min - exp[i]));
       const total = dev.reduce((x, y) => x + y, 0);
@@ -315,6 +319,7 @@ export function computeEmployee(data: TimesheetData, emp: EmployeeData): Sheet {
       occurrences: occ,
       flags,
       closed: data.closed.some((c) => c.start <= date && c.end >= date),
+      future,
     });
   }
 
@@ -327,7 +332,7 @@ export function computeEmployee(data: TimesheetData, emp: EmployeeData): Sheet {
     days,
     schedule_missing: days.some((d) => d.flags.includes("sem_jornada")),
     totals: {
-      expected: sum((d) => d.expected),
+      expected: sum((d) => (d.future ? 0 : d.expected)),
       worked: sum((d) => d.worked),
       night: sum((d) => d.night),
       extra: sum((d) => d.extra),
