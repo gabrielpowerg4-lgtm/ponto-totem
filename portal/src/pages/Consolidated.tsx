@@ -114,11 +114,10 @@ export function Monthly() {
     const today = todayIso();
     const closedKey = new Set(closedRows.map((r) => `${r.cpf}|${r.period_start}`));
     let wanted: Period[] = [];
-    if (selected) wanted = selected.closed ? [] : [selected];
-    else if (cpf) {
-      const last = closedRows.filter((r) => r.cpf === cpf).map((r) => r.period_start).sort().pop() ?? "";
-      wanted = periods.filter((p) => !p.closed && p.start > last && p.start <= today).slice(0, 3);
-    } else if (!month) wanted = periods.filter((p) => p.current && (!year || ym(p.end).y === Number(year)));
+    // Periodos abertos que ja comecaram (os 3 mais recentes); fechamentos individuais saem pelo closedKey.
+    const open = periods.filter((p) => !p.closed && p.start <= today).sort((a, b) => b.start.localeCompare(a.start)).slice(0, 3);
+    if (selected) wanted = open.filter((p) => p.start === selected.start);
+    else if (!month) wanted = open.filter((p) => !year || ym(p.end).y === Number(year));
     if (wanted.length === 0) return;
     let alive = true;
     Promise.all(wanted.map((p) => rpc<TimesheetData>("portal_timesheet", { p_from: p.start, p_to: p.end, p_cpf: cpf })
@@ -128,7 +127,9 @@ export function Monthly() {
         const out: Row[] = [];
         for (const { p, d } of list) {
           for (const s of cpf ? d.employees.filter((e) => e.cpf === cpf).map((e) => computeEmployee(d, e)) : computeAll(d)) {
-            if (!closedKey.has(`${s.cpf}|${p.start}`)) out.push(previewRow(s, p));
+            const r = previewRow(s, p);
+            const moved = r.before || r.extras || r.debits || r.bonus;
+            if (!closedKey.has(`${s.cpf}|${p.start}`) && moved) out.push(r);
           }
         }
         setPreview(out);
