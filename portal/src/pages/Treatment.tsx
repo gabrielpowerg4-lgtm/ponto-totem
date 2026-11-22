@@ -358,7 +358,8 @@ function MarkChip({ m }: { m: DayMark }) {
     : m.disregard
     ? `Desconsiderada: ${m.disregard.reason}`
     : `NSR ${m.nsr} · ${FACE_LABEL[m.face ?? ""] ?? ""}${m.online === false ? " · off-line" : ""}`;
-  const alert = m.kind === "O" && !m.disregard && m.face && m.face !== "ROSTO_CONFERE" && m.face !== "VIVACIDADE_OK";
+  const alert = m.kind === "O" && !m.disregard && !m.face_confirm && m.face && m.face !== "ROSTO_CONFERE" &&
+    m.face !== "VIVACIDADE_OK";
   return (
     <span className={cls + (alert ? " alert" : "")} title={title}>
       {fmtClock(m.at_min)}{m.next_day ? "⁺¹" : ""}{m.kind === "I" ? " I" : ""}
@@ -477,6 +478,16 @@ function DayPanel({ day, readOnly, companyId, onChanged }: {
     }
   };
 
+  const faceAction = (m: DayMark) => {
+    if (m.face_confirm) {
+      const reason = ask(`Motivo para desfazer a confirmação do rosto na marcação das ${fmtClock(m.at_min)}:`);
+      if (reason) run(() => rpc("portal_face_confirm_revoke", { p: { id: m.face_confirm!.id, reason } }));
+    } else {
+      const reason = ask(`Como a identidade foi confirmada na marcação das ${fmtClock(m.at_min)}? (ex.: confirmado com o responsável da obra)`);
+      if (reason) run(() => rpc("portal_face_confirm", { p: { nsr: m.nsr, reason } }));
+    }
+  };
+
   const addMark = (e: React.FormEvent) => {
     e.preventDefault();
     const date = include.nextDay ? nextDate(day.date) : day.date;
@@ -577,15 +588,29 @@ function DayPanel({ day, readOnly, companyId, onChanged }: {
                       ) : (
                         <>
                           <span className="muted small">NSR {m.nsr}</span>
-                          <Badge tone={faceTone(m.face)}>{FACE_LABEL[m.face ?? ""] ?? "Sem validação"}</Badge>
+                          {m.face_confirm ? (
+                            <span title={`${m.face_confirm.reason} · CPF ${formatCpf(m.face_confirm.by)}`}>
+                              <Badge tone="ok">Rosto confirmado pelo RH</Badge>
+                            </span>
+                          ) : (
+                            <Badge tone={faceTone(m.face)}>{FACE_LABEL[m.face ?? ""] ?? "Sem validação"}</Badge>
+                          )}
                           {m.online === false && <Badge tone="warn">Off-line</Badge>}
+                          {m.face_confirm && <span className="muted small">{m.face_confirm.reason}</span>}
                         </>
                       )}
                     </span>
                     {!readOnly && (
-                      <button className="ghost small" disabled={busy} onClick={() => markAction(m)}>
-                        {m.kind === "I" ? "Remover" : m.disregard ? "Voltar a considerar" : "Desconsiderar"}
-                      </button>
+                      <span className="dp-btns">
+                        {m.kind === "O" && !m.disregard && faceTone(m.face) === "error" && (
+                          <button className="ghost small" disabled={busy} onClick={() => faceAction(m)}>
+                            {m.face_confirm ? "Desfazer confirmação" : "Confirmar rosto"}
+                          </button>
+                        )}
+                        <button className="ghost small" disabled={busy} onClick={() => markAction(m)}>
+                          {m.kind === "I" ? "Remover" : m.disregard ? "Voltar a considerar" : "Desconsiderar"}
+                        </button>
+                      </span>
                     )}
                   </li>
                 ))}

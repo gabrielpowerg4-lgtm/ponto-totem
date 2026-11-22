@@ -80,6 +80,8 @@ const ACTION_LABEL: Record<string, string> = {
   ocorrencia_revogada: "Ocorrência cancelada",
   periodo_fechado: "Período fechado",
   periodo_reaberto: "Período reaberto",
+  rosto_confirmado: "Rosto confirmado pelo RH",
+  rosto_confirmacao_desfeita: "Confirmação de rosto desfeita",
   funcionario_incluido: "Funcionário cadastrado",
   funcionario_alterado: "Funcionário alterado",
   foto_funcionario: "Foto do funcionário",

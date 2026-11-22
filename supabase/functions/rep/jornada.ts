@@ -62,6 +62,8 @@ export type MarkData = {
   by?: string;
   at?: string;
   disregard: { id: string; reason: string; by: string; at: string } | null;
+  /** RH confirmou a identidade quando o rosto nao conferiu (a marcacao continua original). */
+  face_confirm?: { id: string; reason: string; by: string; at: string } | null;
 };
 export type Occurrence = {
   id: string;
@@ -152,6 +154,7 @@ export const FLAG_LABEL: Record<string, string> = {
   falta: "Falta",
   ajustado: "Tratado",
   fora_contrato: "Fora do contrato",
+  rosto_confirmado: "Rosto confirmado pelo RH",
 };
 
 export const OCCURRENCE_LABEL: Record<string, string> = {
@@ -344,7 +347,9 @@ export function computeEmployee(data: TimesheetData, emp: EmployeeData): Sheet {
     if (!outside && eff.length % 2 === 1) flags.push("impar");
     if (!outside && expected > 0 && eff.length === 0 && !falta && !future) flags.push("sem_marcacao");
     if (falta) flags.push("falta");
-    if (eff.some((m) => m.kind === "O" && m.face && !FACE_OK.has(m.face))) flags.push("rosto");
+    const faceBad = eff.filter((m) => m.kind === "O" && m.face && !FACE_OK.has(m.face));
+    if (faceBad.some((m) => !m.face_confirm)) flags.push("rosto");
+    else if (faceBad.length > 0) flags.push("rosto_confirmado");
     if (eff.some((m) => m.kind === "O" && m.online === false)) flags.push("offline");
     if (sch && (expectedBase === 0 || fullDay)) {
       if (worked > 0) flags.push("descanso_trabalhado");
