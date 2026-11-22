@@ -374,7 +374,7 @@ fun LocalEmployeeForm(state: AppState) {
         Field(
             "E-mail", email, { email = it.trim() },
             keyboard = KeyboardType.Email,
-            supporting = "Será usado para enviar o comprovante quando o envio por e-mail for ativado."
+            supporting = "Recebe o comprovante de cada marcação por e-mail."
         )
         VSpace(12)
         Field(

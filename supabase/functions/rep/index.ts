@@ -2,10 +2,11 @@
 // Autenticacao propria: cada terminal tem um token, guardado no banco so como hash.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { buildAej, buildAejFull, buildAfd, FiscalError } from "./fiscal.ts";
+import { buildAej, buildAejFull, buildAfd, FiscalError, tzOffset } from "./fiscal.ts";
 import { closingRow, computeAll, type TimesheetData } from "./jornada.ts";
 import { isEmail, MailError, mailConfig, maskEmail, sendMail } from "./mailer.ts";
 import { type AlertItem, buildAlertMessages } from "./docAlerts.ts";
+import { buildReceipt, type ReceiptData } from "./receipt.ts";
 
 const PORTAL_URL = Deno.env.get("PORTAL_URL") ?? "https://semax-sgi-ponto.eng.br";
 
@@ -424,6 +425,29 @@ Deno.serve(async (req: Request) => {
       }
       console.log(JSON.stringify({ event: "doc_alerts_run", summary }));
       return json(200, { ok: true, summary });
+    }
+
+    // Agendador (pg_cron, a cada minuto): comprovantes de marcacao por e-mail.
+    if (req.method === "POST" && path.endsWith("/v1/cron/receipts")) {
+      const key = req.headers.get("x-cron-key") ?? "";
+      const { data: okKey } = await db.rpc("rep_cron_key_ok", { p_key: key });
+      if (okKey !== true) return json(401, { error: "invalid_token" });
+      const { data: batch, error } = await db.rpc("rep_receipts_claim", { p_limit: 40 });
+      if (error) return failure(error);
+      const results: { punch_id: string; ok: boolean; error?: string }[] = [];
+      for (const r of (batch ?? []) as ReceiptData[]) {
+        const load = async () => (await db.rpc("rep_mail_config", { p_company: r.company_id })).data;
+        try {
+          const m = buildReceipt(r, tzOffset(r.timezone || "America/Sao_Paulo", r.marked_at.slice(0, 10)));
+          await sendMail(load, { to: r.email, subject: m.subject, text: m.text, html: m.html });
+          results.push({ punch_id: r.punch_id, ok: true });
+        } catch (e) {
+          results.push({ punch_id: r.punch_id, ok: false, error: e instanceof MailError ? e.code : "smtp_failed" });
+        }
+      }
+      if (results.length) await db.rpc("rep_receipts_done", { p: results });
+      console.log(JSON.stringify({ event: "receipts_run", sent: results.filter((x) => x.ok).length, failed: results.filter((x) => !x.ok).length }));
+      return json(200, { ok: true, processed: results.length });
     }
 
     // Portal: previa do aviso de um tipo de documento, ou envio de teste para quem esta logado.

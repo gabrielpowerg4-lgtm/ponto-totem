@@ -139,6 +139,8 @@ export default function MailPage() {
             </div>
           </form>
 
+          <ReceiptEmail />
+
           <section className="card">
             <h2>Teste de envio</h2>
             <div className="filters">
@@ -158,5 +160,53 @@ export default function MailPage() {
         </>
       )}
     </>
+  );
+}
+
+type ReceiptInfo = { enabled: boolean; sent_today: number; pending: number; failed: number; without_email: number; last_error: string | null };
+
+/** Comprovante de marcacao por e-mail ao funcionario. */
+function ReceiptEmail() {
+  const [info, setInfo] = useState<ReceiptInfo | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const load = () => rpc<ReceiptInfo>("portal_receipt_email_get").then(setInfo).catch((e) => setError(errorText(e)));
+  useEffect(() => { load(); }, []);
+  const toggle = async () => {
+    if (!info) return;
+    setBusy(true);
+    try {
+      setInfo(await rpc<ReceiptInfo>("portal_receipt_email_set", { p: { enabled: !info.enabled } }));
+    } catch (e) {
+      setError(errorText(e, "Não foi possível alterar."));
+    }
+    setBusy(false);
+  };
+  return (
+    <section className="card">
+      <div className="card-head">
+        <h2>Comprovante de marcação por e-mail</h2>
+        {info && (info.enabled ? <Badge tone="ok">Ligado</Badge> : <Badge tone="neutral">Desligado</Badge>)}
+      </div>
+      {error && <Banner tone="error">{error}</Banner>}
+      <p className="muted small">
+        A cada marcação no tablet, o funcionário recebe no e-mail do cadastro o Comprovante de Registro de Ponto
+        (empregador, local, nome e CPF, data e hora, NSR e código hash). O envio sai em até 1 minuto; se falhar,
+        o sistema tenta de novo.
+      </p>
+      {!info ? <Loading /> : (
+        <>
+          <div className="toolbar">
+            <span className="small">Enviados hoje: <b>{info.sent_today}</b></span>
+            <span className="small">Na fila: <b>{info.pending}</b></span>
+            <span className="small">Com falha: <b>{info.failed}</b>{info.last_error ? ` (${errorText(new Error(info.last_error), info.last_error)})` : ""}</span>
+            <span className="small">Funcionários ativos sem e-mail: <b>{info.without_email}</b></span>
+          </div>
+          <button className={info.enabled ? "ghost" : "primary"} disabled={busy} onClick={toggle}>
+            {busy ? "Salvando" : info.enabled ? "Desligar envio do comprovante" : "Ligar envio do comprovante"}
+          </button>
+        </>
+      )}
+    </section>
   );
 }

@@ -782,8 +782,8 @@ fun ReceiptScreen(state: AppState) {
             )
             VSpace(12)
             Banner(
-                text = "Registro da marcação, ainda sem assinatura digital. O comprovante " +
-                    "oficial assinado e o envio por e-mail dependem do certificado da empresa.",
+                text = "Uma cópia deste comprovante é enviada para o e-mail cadastrado do " +
+                    "funcionário. A assinatura digital depende do certificado da empresa.",
                 tone = status.warning
             )
             VSpace(16)
