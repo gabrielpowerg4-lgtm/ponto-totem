@@ -176,6 +176,8 @@ const ERRORS: Record<string, string> = {
   attachment_limit: "O dia já tem 3 anexos.",
   invalid_file: "Não foi possível enviar o arquivo (PDF, JPG ou PNG, até 5 MB).",
   settled_after_close: "Houve pagamento ou desconto depois deste fechamento. Estorne-o antes de reabrir.",
+  previous_open: "O período anterior deste funcionário ainda está aberto. Feche-o antes.",
+  company_closed: "O período da empresa está fechado. Reabra o período antes de reabrir o funcionário.",
   clt_date_closed: "A data das regras da CLT não pode ficar dentro de um período já fechado.",
   invalid_code: "Código inválido: use letras, números, - ou _ (até 30).",
   duplicate_code: "Já existe uma jornada com este código.",
@@ -258,10 +260,20 @@ export async function closePeriod(start: string, end: string) {
   }
 }
 
+/** Fecha o periodo de um funcionario: o servidor recalcula e grava os dias dele. */
+export async function closeEmployee(start: string, end: string, cpf: string) {
+  try {
+    return (await post("/v1/portal/periods/close-employee", { start, end, cpf }, true)) as { days: number; pending_days: number };
+  } catch (e) {
+    throw new Error(errorText(e, "Não foi possível fechar o funcionário."));
+  }
+}
+
 export type Period = {
   start: string;
   end: string;
   current: boolean;
+  employees_closed?: number;
   closed: { closed_at: string; closed_cpf: string; closed_by: string } | null;
 };
 

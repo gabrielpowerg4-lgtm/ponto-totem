@@ -82,7 +82,8 @@ export type TimesheetData = {
   employees: EmployeeData[];
   marks: MarkData[];
   occurrences: Occurrence[];
-  closed: { start: string; end: string; closed_at: string }[];
+  /** Periodos fechados: da empresa (sem cpf) ou de um funcionario (com cpf). */
+  closed: { start: string; end: string; closed_at: string; cpf?: string | null }[];
   bonus_removals?: BonusRemoval[];
   attachments?: Attachment[];
   /** Data de hoje (AAAA-MM-DD). Dias depois dela nao contam como falta nem entram no saldo. */
@@ -402,7 +403,7 @@ export function computeEmployee(data: TimesheetData, emp: EmployeeData): Sheet {
       tolerance,
       occurrences: occ,
       flags,
-      closed: data.closed.some((c) => c.start <= date && c.end >= date),
+      closed: data.closed.some((c) => (!c.cpf || c.cpf === emp.cpf) && c.start <= date && c.end >= date),
       future,
       mode: clt ? "clt" : "sgi",
       holiday,

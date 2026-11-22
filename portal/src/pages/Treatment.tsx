@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  br, errorText, FACE_LABEL, formatCpf, rpc, supabase, todayIso, WEEKDAY, type Employee, type Me, type Period,
+  br, closeEmployee, errorText, FACE_LABEL, formatCpf, rpc, supabase, todayIso, WEEKDAY, type Employee, type Me,
+  type Period,
 } from "../api";
 import {
   ALERTS, computeEmployee, FLAG_LABEL, fmtClock, fmtMin, OCCURRENCE_LABEL, type Day, type DayMark,
@@ -58,7 +59,9 @@ export function Hours({ value, signed = false }: { value: number; signed?: boole
 
 export default function Treatment({ me, goAccount }: { me: Me; goAccount: () => void }) {
   const params = hashParams();
-  const { periods, error: periodError } = usePeriods();
+  const { periods, error: periodError, reload: reloadPeriods } = usePeriods();
+  const [closing, setClosing] = useState(false);
+  const [closeMsg, setCloseMsg] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const [start, setStart] = useState(params.get("start") ?? "");
   const [cpf, setCpf] = useState(params.get("cpf") ?? "");
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -117,7 +120,45 @@ export default function Treatment({ me, goAccount }: { me: Me; goAccount: () => 
   };
 
   const needsCpf = me.cpf.length !== 11;
-  const closed = !!period?.closed;
+  const empClosure = data && period ? data.closed.find((c) => c.cpf === cpf && c.start === period.start) ?? null : null;
+  const closed = !!period?.closed || !!empClosure;
+  const today = todayIso();
+  const canCloseEmployee = !!period && !period.closed && !empClosure && !needsCpf &&
+    (period.end <= today || (!!emp?.dismissed_on && emp.dismissed_on <= today));
+
+  const closeOne = async () => {
+    if (!period || !sheet) return;
+    const warn = sheet.totals.pending_days > 0 ? `Ainda há ${sheet.totals.pending_days} dia(s) com alerta. ` : "";
+    if (!window.confirm(`${warn}Fechar o período de ${br(period.start)} a ${br(period.end)} de ${sheet.name}? Os dias dele ficam travados e o saldo vai para o banco de horas.`)) return;
+    setClosing(true);
+    setCloseMsg(null);
+    try {
+      await closeEmployee(period.start, period.end, cpf);
+      setCloseMsg({ tone: "ok", text: `Período de ${sheet.name} fechado.` });
+      reloadPeriods();
+      load();
+    } catch (e) {
+      setCloseMsg({ tone: "error", text: e instanceof Error ? e.message : "Não foi possível fechar." });
+    }
+    setClosing(false);
+  };
+
+  const reopenOne = async () => {
+    if (!period || !sheet) return;
+    const reason = window.prompt(`Motivo para reabrir o período de ${sheet.name}:`);
+    if (!reason || reason.trim().length < 3) return;
+    setClosing(true);
+    setCloseMsg(null);
+    try {
+      await rpc("portal_employee_reopen", { p: { cpf, start: period.start, reason } });
+      setCloseMsg({ tone: "ok", text: `Período de ${sheet.name} reaberto.` });
+      reloadPeriods();
+      load();
+    } catch (e) {
+      setCloseMsg({ tone: "error", text: errorText(e) });
+    }
+    setClosing(false);
+  };
   const days = sheet ? sheet.days.filter((d) => !onlyAlerts || d.flags.some((f) => ALERTS.includes(f))) : [];
 
   return (
@@ -159,11 +200,41 @@ export default function Treatment({ me, goAccount }: { me: Me; goAccount: () => 
         error ? null : <Loading />
       ) : (
         <>
-          {closed && (
-            <Banner tone="warn">
-              Período fechado em {new Date(period!.closed!.closed_at).toLocaleDateString("pt-BR")}. Somente consulta.
-            </Banner>
-          )}
+          {closeMsg && <Banner tone={closeMsg.tone}>{closeMsg.text}</Banner>}
+          <div className="card close-bar">
+            {period?.closed ? (
+              <>
+                <Badge tone="ok">Período fechado</Badge>
+                <span className="muted small">
+                  Fechado para a empresa em {new Date(period.closed.closed_at).toLocaleDateString("pt-BR")}. Somente consulta.
+                </span>
+              </>
+            ) : empClosure ? (
+              <>
+                <Badge tone="ok">Fechado para este funcionário</Badge>
+                <span className="muted small">em {new Date(empClosure.closed_at).toLocaleString("pt-BR")}. Somente consulta.</span>
+                {me.role === "admin" && (
+                  <button className="ghost small" disabled={closing} onClick={reopenOne}>Reabrir funcionário</button>
+                )}
+              </>
+            ) : (
+              <>
+                <Badge tone="warn">Aberto</Badge>
+                <span className="muted small">
+                  {canCloseEmployee
+                    ? "Feche só este funcionário, sem esperar o fechamento da empresa."
+                    : period && period.end > today
+                    ? `O fechamento libera em ${br(period.end)} (ou antes, para funcionário desligado).`
+                    : "Informe o seu CPF em Minha conta para fechar."}
+                </span>
+                {canCloseEmployee && (
+                  <button className="primary small" disabled={closing} onClick={closeOne}>
+                    {closing ? "Fechando" : "Fechar este funcionário"}
+                  </button>
+                )}
+              </>
+            )}
+          </div>
           {sheet.schedule_missing && (
             <Banner tone="warn">
               Funcionário sem jornada em parte do período: defina a jornada na tela Funcionários para calcular as horas.

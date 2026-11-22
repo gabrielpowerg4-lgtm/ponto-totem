@@ -120,7 +120,7 @@ function failure(error: { message?: string } | null): Response {
   for (const code of [
     "missing_fields", "invalid_employer_id", "invalid_cno", "invalid_caepf",
     "invalid_responsible_cpf", "invalid_schedule", "invalid_period", "not_allowed",
-    "cpf_required", "period_closed", "period_not_finished",
+    "cpf_required", "period_closed", "period_not_finished", "previous_open", "not_found",
   ]) {
     if (message.includes(code)) return json(400, { error: code });
   }
@@ -302,6 +302,31 @@ Deno.serve(async (req: Request) => {
         days: days.length,
         pending_days: sheets.reduce((x, sh) => x + sh.totals.pending_days, 0),
       });
+    }
+
+    // Portal: fechamento de um funcionario no periodo (antes ou sem o fechamento da empresa).
+    if (req.method === "POST" && path.endsWith("/v1/portal/periods/close-employee")) {
+      const caller = await portalCaller(req);
+      if (!caller) return json(401, { error: "invalid_token" });
+      const body = await req.json();
+      const start = String(body.start ?? "");
+      const end = String(body.end ?? "");
+      const cpf = String(body.cpf ?? "").replace(/\D/g, "");
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end) || cpf.length !== 11) {
+        return json(400, { error: "invalid_period" });
+      }
+      const { data, error } = await db.rpc("rep_timesheet_data", {
+        p_company: caller.company, p_from: start, p_to: end, p_cpf: cpf,
+      });
+      if (error) return failure(error);
+      const sheets = computeAll(data as TimesheetData).filter((sh) => sh.cpf === cpf);
+      if (sheets.length === 0) return json(400, { error: "not_found" });
+      const days = sheets[0].days.map(closingRow);
+      const { error: closeError } = await db.rpc("rep_employee_close", {
+        p_user: caller.id, p_cpf: cpf, p_start: start, p_end: end, p_days: days,
+      });
+      if (closeError) return failure(closeError);
+      return json(200, { ok: true, days: days.length, pending_days: sheets[0].totals.pending_days });
     }
 
     const tokenHash = await bearerHash(req);

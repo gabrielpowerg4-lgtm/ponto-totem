@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { br, closePeriod, download, errorText, formatCpf, rpc, todayIso, type Me } from "../api";
+import { br, closeEmployee, closePeriod, download, errorText, formatCpf, rpc, todayIso, type Me } from "../api";
 import { ALERTS, computeAll, FLAG_LABEL, fmtMin, type Sheet, type TimesheetData } from "../jornada";
 import { Badge, Banner, Empty, Loading, PageHead } from "../ui";
 import { Hours, PeriodSelect, usePeriods } from "./Treatment";
@@ -55,6 +55,50 @@ export default function Closing({ mode, me, openTreatment }: {
 
   useEffect(load, [period?.start, period?.end, period?.closed?.closed_at]);
 
+  type Closure = { cpf: string; closed_at: string; closed_by: string | null };
+  const [closures, setClosures] = useState<Closure[]>([]);
+  const loadClosures = () => {
+    if (!period || mode !== "close") return;
+    rpc<Closure[]>("portal_employee_closures", { p_start: period.start }).then(setClosures).catch(() => setClosures([]));
+  };
+  useEffect(loadClosures, [period?.start, period?.employees_closed, period?.closed?.closed_at, mode]);
+  const closedSet = useMemo(() => new Map(closures.map((c) => [c.cpf, c])), [closures]);
+  const [rowBusy, setRowBusy] = useState("");
+
+  const closeOne = async (s: Sheet) => {
+    if (!period) return;
+    const warn = s.totals.pending_days > 0 ? `${s.name} ainda tem ${s.totals.pending_days} dia(s) com alerta. ` : "";
+    if (!window.confirm(`${warn}Fechar o período de ${s.name}? Os dias dele ficam travados.`)) return;
+    setRowBusy(s.cpf);
+    setMsg(null);
+    try {
+      await closeEmployee(period.start, period.end, s.cpf);
+      setMsg({ tone: "ok", text: `${s.name}: período fechado.` });
+      reloadPeriods();
+      loadClosures();
+    } catch (e) {
+      setMsg({ tone: "error", text: e instanceof Error ? e.message : "Não foi possível fechar." });
+    }
+    setRowBusy("");
+  };
+
+  const reopenOne = async (s: Sheet) => {
+    if (!period) return;
+    const reason = window.prompt(`Motivo para reabrir o período de ${s.name}:`);
+    if (!reason || reason.trim().length < 3) return;
+    setRowBusy(s.cpf);
+    setMsg(null);
+    try {
+      await rpc("portal_employee_reopen", { p: { cpf: s.cpf, start: period.start, reason } });
+      setMsg({ tone: "ok", text: `${s.name}: período reaberto.` });
+      reloadPeriods();
+      loadClosures();
+    } catch (e) {
+      setMsg({ tone: "error", text: errorText(e) });
+    }
+    setRowBusy("");
+  };
+
   const sheets = useMemo(() => (data ? computeAll(data) : []), [data]);
 
   const summary = useMemo(() => {
@@ -77,7 +121,8 @@ export default function Closing({ mode, me, openTreatment }: {
     const warn = summary.pendingDays > 0
       ? `Ainda há ${summary.pendingDays} dia(s) com alerta em ${summary.pendingEmployees} funcionário(s). `
       : "";
-    if (!window.confirm(`${warn}Fechar o período de ${br(period.start)} a ${br(period.end)}? Depois de fechado, nada pode ser tratado nele.`)) {
+    const already = closures.length ? ` ${closures.length} funcionário(s) já fechado(s) individualmente continuam como estão.` : "";
+    if (!window.confirm(`${warn}Fechar o período de ${br(period.start)} a ${br(period.end)} para todos os funcionários?${already} Depois de fechado, nada pode ser tratado nele.`)) {
       return;
     }
     setBusy(true);
@@ -155,7 +200,7 @@ export default function Closing({ mode, me, openTreatment }: {
               <Badge tone="warn">Aberto</Badge>
               {finished ? (
                 <button className="primary" disabled={busy || !data || me.cpf.length !== 11} onClick={close}>
-                  {busy ? "Fechando" : "Fechar período"}
+                  {busy ? "Fechando" : closures.length ? "Fechar os demais funcionários" : "Fechar período de todos"}
                 </button>
               ) : (
                 <span className="muted small">Pode ser fechado a partir de {br(period?.end ?? todayIso())}.</span>
@@ -197,11 +242,73 @@ export default function Closing({ mode, me, openTreatment }: {
           </div>
 
           {mode === "close" && (
-            <p className="muted">
-              {summary.pendingDays > 0
-                ? `Ainda há ${summary.pendingDays} dia(s) com alerta. Trate em Ponto, Pendências, antes de fechar.`
-                : "Nenhuma pendência no período."}
-            </p>
+            <>
+              <p className="muted">
+                {summary.pendingDays > 0
+                  ? `Ainda há ${summary.pendingDays} dia(s) com alerta. Trate em Ponto, Pendências, antes de fechar.`
+                  : "Nenhuma pendência no período."}
+                {" "}Você pode fechar funcionário por funcionário ou todos de uma vez no botão acima.
+              </p>
+              <section className="card flush">
+                <div className="card-head pad">
+                  <h2>Funcionários</h2>
+                  <span className="muted small">
+                    {period?.closed ? sheets.length : closures.length} de {sheets.length} fechado(s)
+                  </span>
+                </div>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Funcionário</th>
+                        <th>Alertas</th>
+                        <th className="num">Saldo</th>
+                        <th className="num">Banco final</th>
+                        <th>Situação</th>
+                        <th />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sheets.map((s) => {
+                        const own = closedSet.get(s.cpf);
+                        return (
+                          <tr key={s.cpf}>
+                            <td>
+                              <div className="strong">{s.name}</div>
+                              <div className="muted small">{formatCpf(s.cpf)}</div>
+                            </td>
+                            <td><Alerts sheet={s} /></td>
+                            <td className="num"><Hours value={s.totals.extra - s.totals.missing} signed /></td>
+                            <td className="num"><Hours value={s.totals.bank_after} signed /></td>
+                            <td>
+                              {own ? <Badge tone="ok">Fechado</Badge>
+                                : period?.closed ? <Badge tone="ok">Fechado com a empresa</Badge>
+                                : <Badge tone="warn">Aberto</Badge>}
+                              {own && <div className="muted small">{new Date(own.closed_at).toLocaleDateString("pt-BR")}</div>}
+                            </td>
+                            <td className="right nowrap">
+                              <button className="ghost small" onClick={() => openTreatment(s.cpf, period!.start)}>
+                                {own || period?.closed ? "Ver" : "Tratar"}
+                              </button>{" "}
+                              {!own && !period?.closed && finished && me.cpf.length === 11 && (
+                                <button className="primary small" disabled={rowBusy === s.cpf} onClick={() => closeOne(s)}>
+                                  {rowBusy === s.cpf ? "Fechando" : "Fechar"}
+                                </button>
+                              )}
+                              {own && !period?.closed && me.role === "admin" && (
+                                <button className="ghost small" disabled={rowBusy === s.cpf} onClick={() => reopenOne(s)}>
+                                  Reabrir
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            </>
           )}
           {mode === "pending" && <Notices />}
           {mode !== "close" && <>
