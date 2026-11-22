@@ -1,0 +1,9 @@
+-- O primeiro fechamento so e livre quando nao ha marcacao antes do periodo. Havendo historico
+-- (marcacoes anteriores), o periodo anterior precisa estar fechado: empresa e funcionario.
+-- Aplicado no banco como substituicao de texto nas funcoes rep_employee_close e rep_period_close:
+--   rep_employee_close: condicao do periodo anterior ganhou
+--     or exists (select 1 from public.punches where company_id = v_company and cpf = v_cpf
+--                and marked_at < (p_start::timestamp at time zone (select timezone from public.companies where id = v_company)))
+--   rep_period_close: condicao do periodo anterior ganhou
+--     or exists (select 1 from public.punches where company_id = v_company
+--                and marked_at < (p_start::timestamp at time zone v_tz))
