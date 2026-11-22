@@ -157,7 +157,7 @@ export type PortalUser = {
 
 const ERRORS: Record<string, string> = {
   not_allowed: "Somente o administrador pode fazer isso.",
-  cpf_required: "Informe o seu CPF em Minha conta antes de alterar os dados da empresa.",
+  cpf_required: "Informe o seu CPF em Meus dados antes de alterar os dados da empresa.",
   invalid_cpf: "CPF inválido: informe os 11 números.",
   invalid_employer_id: "CNPJ (14 números) ou CPF (11 números) do empregador inválido.",
   invalid_caepf: "CAEPF inválido: informe os 14 números.",

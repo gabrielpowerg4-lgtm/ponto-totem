@@ -217,7 +217,7 @@ export default function Closing({ mode, me, openTreatment }: {
         {mode !== "close" && period?.closed && <Badge tone="ok">Período fechado</Badge>}
       </div>
       {mode === "close" && me.cpf.length !== 11 && !period?.closed && (
-        <Banner tone="warn">Para fechar o período é preciso o seu CPF: não achamos um funcionário com o seu e-mail de acesso. Veja em Minha conta.</Banner>
+        <Banner tone="warn">Para fechar o período é preciso o seu CPF: não achamos um funcionário com o seu e-mail de acesso. Veja em Meus dados.</Banner>
       )}
 
       {!data ? (error ? null : <Loading />) : (

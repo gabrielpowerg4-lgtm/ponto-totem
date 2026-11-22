@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { API_BASE, SUPABASE_URL, firstAccess, formatDateTime, rpc, setTimezone, signupAdmin, supabase, type Me, type Summary } from "./api";
 import { PageHead, Stat } from "./ui";
+import { photoUrl } from "./pages/EmployeeForm";
 import Punches from "./pages/Punches";
 import { Employees, Sites, Terminals } from "./pages/Registers";
 import { Account, CompanyPage, RulesPage, Users } from "./pages/Admin";
@@ -264,6 +265,7 @@ function Portal({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void 
   const [denied, setDenied] = useState(false);
   const [page, setPageState] = useState<Page>(pageFromHash);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [myPhoto, setMyPhoto] = useState("");
   const [open, setOpen] = useState<Record<string, boolean>>(loadOpen);
 
   const loadMe = () =>
@@ -272,6 +274,14 @@ function Portal({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void 
         if (!m) return setDenied(true);
         setTimezone(m.timezone);
         setMe(m);
+        if (m.cpf_source === "funcionario") {
+          rpc<{ cpf: string; photo_path?: string }[]>("portal_employees")
+            .then((list) => {
+              const path = list.find((e) => e.cpf === m.cpf)?.photo_path ?? "";
+              return path ? photoUrl([path]).then((u) => setMyPhoto(u[path] ?? "")) : setMyPhoto("");
+            })
+            .catch(() => undefined);
+        }
       })
       .catch(() => setDenied(true));
 
@@ -324,7 +334,7 @@ function Portal({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void 
   function isOpen(id: string) {
     return open[id] ?? (id === currentGroup || id === "ponto");
   }
-  const title = current === "home" ? "Início" : current === "account" ? "Minha conta"
+  const title = current === "home" ? "Início" : current === "account" ? "Meus dados"
     : groups.flatMap((g) => g.items).find((i) => i.page === current)?.label;
 
   return (
@@ -359,15 +369,15 @@ function Portal({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void 
           ))}
         </nav>
         <div className="sidebar-foot">
-          <div className="user-card">
-            <span className="avatar">{(me.employee_name || me.email).trim().charAt(0).toUpperCase()}</span>
-            <div className="user-text">
-              <div className="strong ellipsis">{me.employee_name || me.email.split("@")[0]}</div>
-              <div className="muted small ellipsis">{me.company}</div>
-            </div>
-          </div>
-          <button className={current === "account" ? "nav-item foot active" : "nav-item foot"} onClick={() => go("account")}>
-            <Icon name="conta" /><span>Minha conta</span>
+          <button className={current === "account" ? "user-card active" : "user-card"} onClick={() => go("account")}
+            title="Meus dados">
+            {myPhoto
+              ? <img className="avatar photo" src={myPhoto} alt="" />
+              : <span className="avatar">{(me.employee_name || me.email).trim().charAt(0).toUpperCase()}</span>}
+            <span className="user-text">
+              <span className="strong ellipsis block">{me.employee_name || me.email.split("@")[0]}</span>
+              <span className="muted small ellipsis block">Meus dados · {me.company}</span>
+            </span>
           </button>
           <button className="nav-item foot" onClick={toggleTheme}>
             <Icon name="tema" /><span>{theme === "dark" ? "Tema claro" : "Tema escuro"}</span>

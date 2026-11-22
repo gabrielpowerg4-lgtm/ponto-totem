@@ -421,7 +421,7 @@ export function Settlements({ me, goAccount }: { me: Me; goAccount: () => void }
       {needsCpf && (
         <Banner tone="warn">
           Para quitar horas é preciso o seu CPF (fica registrado em cada lançamento).{" "}
-          <button className="link inline" onClick={goAccount}>Ir para Minha conta</button>
+          <button className="link inline" onClick={goAccount}>Ir para Meus dados</button>
         </Banner>
       )}
       <form className="card form" onSubmit={doPreview}>

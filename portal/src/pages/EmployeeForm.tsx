@@ -274,7 +274,7 @@ export default function EmployeeForm({ me, employee, sites, onClose, onSaved }: 
             {busy ? "Salvando" : form.new ? "Cadastrar funcionário" : "Salvar alterações"}
           </button>
         </div>
-        {me.cpf.length !== 11 && <p className="muted small pad">Para cadastrar é preciso o seu CPF (veja Minha conta).</p>}
+        {me.cpf.length !== 11 && <p className="muted small pad">Para cadastrar é preciso o seu CPF (veja Meus dados).</p>}
       </form>
     </div>
   );

@@ -216,7 +216,7 @@ export default function Treatment({ me, goAccount }: { me: Me; goAccount: () => 
         <Banner tone="warn">
           Para tratar o ponto é preciso o seu CPF (fica registrado em cada ajuste) e não achamos um funcionário
           com o seu e-mail de acesso.{" "}
-          <button className="link inline" onClick={goAccount}>Ir para Minha conta</button>
+          <button className="link inline" onClick={goAccount}>Ir para Meus dados</button>
         </Banner>
       )}
       {(periodError || error) && <Banner tone="error">{periodError || error}</Banner>}
@@ -269,7 +269,7 @@ export default function Treatment({ me, goAccount }: { me: Me; goAccount: () => 
                     ? "Feche só este funcionário, sem esperar o fechamento da empresa."
                     : period && period.end > today
                     ? `O fechamento libera em ${br(period.end)} (ou antes, para funcionário desligado).`
-                    : "Informe o seu CPF em Minha conta para fechar."}
+                    : "Informe o seu CPF em Meus dados para fechar."}
                 </span>
                 {canCloseEmployee && (
                   <button className="primary small" disabled={closing} onClick={closeOne}>

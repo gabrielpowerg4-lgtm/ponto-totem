@@ -4,6 +4,7 @@ import {
   type Company, type Employee, type Me, type PortalUser, type Role,
 } from "../api";
 import { Badge, Banner, Empty, Loading, PageHead, useLoad } from "../ui";
+import { Avatar, CONTRACT_LABEL, photoUrl } from "./EmployeeForm";
 
 const onlyDigits = (v: string, max: number) => v.replace(/\D/g, "").slice(0, max);
 
@@ -58,7 +59,7 @@ export function CompanyPage({ me, goAccount }: { me: Me; goAccount: () => void }
         <Banner tone="warn">
           Para alterar estes dados é preciso o seu CPF (a Portaria 671 exige o CPF de quem altera a identificação
           do empregador) e não achamos um funcionário com o seu e-mail de acesso.{" "}
-          <button className="link inline" onClick={goAccount}>Ir para Minha conta</button>
+          <button className="link inline" onClick={goAccount}>Ir para Meus dados</button>
         </Banner>
       )}
       {!admin && <Banner tone="warn">Somente o administrador pode alterar estes dados.</Banner>}
@@ -403,7 +404,7 @@ export function Users() {
                 onChange={(e) => setForm({ ...form, password: e.target.value })}
                 required
               />
-              <span className="hint">Pelo menos 8 caracteres. A pessoa pode trocar em Minha conta.</span>
+              <span className="hint">Pelo menos 8 caracteres. A pessoa pode trocar em Meus dados.</span>
             </label>
           </div>
           <div className="grid-2">
@@ -492,7 +493,7 @@ export function Users() {
 }
 
 // ---------------------------------------------------------------------------
-// Minha conta
+// Meus dados
 // ---------------------------------------------------------------------------
 
 export function Account({ me, onChanged }: { me: Me; onChanged: () => void }) {
@@ -528,24 +529,59 @@ export function Account({ me, onChanged }: { me: Me; onChanged: () => void }) {
     setBusy("");
   };
 
+  const { data: employees } = useLoad(() => rpc<Employee[]>("portal_employees"));
+  const own = me.cpf_source === "funcionario" ? employees?.find((e) => e.cpf === me.cpf) ?? null : null;
+  const [photo, setPhoto] = useState("");
+  useEffect(() => {
+    if (own?.photo_path) photoUrl([own.photo_path]).then((m) => setPhoto(m[own.photo_path!] ?? ""));
+  }, [own?.photo_path]);
+  const field = (label: string, value: React.ReactNode) => (
+    <div className="profile-field"><span className="muted small">{label}</span><span>{value || "–"}</span></div>
+  );
+
   return (
     <>
-      <PageHead title="Minha conta" lead={`${me.email} · ${ROLE_LABEL[me.role]}`} />
+      <PageHead title="Meus dados" lead={`${me.email} · ${ROLE_LABEL[me.role]}`} />
       {me.cpf_source === "funcionario" ? (
-        <section className="card form narrow">
-          <h2>CPF</h2>
-          <p className="strong">{formatCpf(me.cpf)}</p>
+        <section className="card profile-card">
+          <div className="profile-head">
+            <Avatar name={me.employee_name ?? me.email} url={photo || undefined} size={88} />
+            <div>
+              <h2>{own?.name ?? me.employee_name}</h2>
+              <div className="muted">
+                {[own?.job_title, own?.contract_type ? CONTRACT_LABEL[own.contract_type] : ""].filter(Boolean).join(" · ") || "Cargo não informado"}
+              </div>
+              <div className="chips tight">
+                <Badge tone="ok">{ROLE_LABEL[me.role]}</Badge>
+                {own?.tablet_responsible && <Badge tone="neutral">Responsável pelo tablet</Badge>}
+              </div>
+            </div>
+            {own && <a className="ghost button small" href={`#bank?cpf=${own.cpf}`}>Meu banco de horas</a>}
+          </div>
+          {!own ? <Loading /> : (
+            <div className="profile-grid">
+              {field("CPF", formatCpf(own.cpf))}
+              {field("E-mail", own.email)}
+              {field("Data de nascimento", own.birth_date ? br(own.birth_date) : "")}
+              {field("Sexo", own.sex === "F" ? "Feminino" : own.sex === "M" ? "Masculino" : "")}
+              {field("Admissão", own.admitted_on ? br(own.admitted_on) : "")}
+              {field("Jornada", own.schedule?.code)}
+              {field("Obras", own.sites.length ? own.sites.join(", ") : "Todas")}
+              {field("Senha de ponto", own.has_pin ? "Cadastrada" : "Não cadastrada")}
+            </div>
+          )}
           <p className="muted small">
-            Vem do seu cadastro de funcionário ({me.employee_name}), ligado pelo e-mail de acesso. Fica registrado
-            nos tratamentos, no fechamento e nas alterações da empresa.
+            Seus dados vêm do cadastro de funcionário, ligado pelo e-mail de acesso. O CPF fica registrado nos
+            tratamentos, no fechamento e nas alterações da empresa. Para corrigir algo, peça ao RH (Cadastros,
+            Funcionários).
           </p>
         </section>
       ) : (
         <form className="card form narrow" onSubmit={saveCpf}>
           <h2>CPF</h2>
           <p className="muted small">
-            Não achamos um funcionário ativo com o e-mail {me.email}. Se você é funcionário, cadastre este e-mail
-            no Bubble e o CPF passa a vir de lá. Se não é, informe o CPF aqui.
+            Não achamos um funcionário ativo com o e-mail {me.email}. Se você é funcionário, peça ao RH para
+            colocar este e-mail no seu cadastro e seus dados passam a aparecer aqui. Se não é, informe o CPF.
           </p>
           <label>
             CPF
