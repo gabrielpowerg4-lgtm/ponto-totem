@@ -127,9 +127,7 @@ export function Monthly() {
         const out: Row[] = [];
         for (const { p, d } of list) {
           for (const s of cpf ? d.employees.filter((e) => e.cpf === cpf).map((e) => computeEmployee(d, e)) : computeAll(d)) {
-            const r = previewRow(s, p);
-            const moved = r.before || r.extras || r.debits || r.bonus;
-            if (!closedKey.has(`${s.cpf}|${p.start}`) && moved) out.push(r);
+            if (!closedKey.has(`${s.cpf}|${p.start}`)) out.push(previewRow(s, p));
           }
         }
         setPreview(out);
@@ -151,7 +149,8 @@ export function Monthly() {
         r.after = r.before + delta;
       }
     }
-    return list;
+    // Previa sem nenhum movimento e sem saldo nao acrescenta nada.
+    return list.filter((r) => !r.preview || r.before || r.extras || r.debits || r.bonus || r.after);
   }, [closedRows, preview]);
   const years = useMemo(() => Array.from(new Set([...(closedRows ?? []).map((r) => ym(r.period_end).y),
     ...(periods ?? []).map((p) => ym(p.end).y)])).sort((a, b) => b - a), [closedRows, periods]);
