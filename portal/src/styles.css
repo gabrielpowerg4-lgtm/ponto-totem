@@ -542,6 +542,6 @@ table.sheet tr.open td { background: var(--accent-soft); }
 }
 .pinfo.strong { background: var(--surface); border-color: var(--accent); }
 .pinfo:nth-child(3) { min-width: 0; }
-.period-row { grid-column: 1 / -1; }
+.period-row { grid-column: 1 / -1; margin-bottom: 6px; }
 .treat-filters { grid-template-columns: 1fr auto; }
 .closing-head { align-items: flex-end; }
