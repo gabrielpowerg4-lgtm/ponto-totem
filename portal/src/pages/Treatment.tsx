@@ -23,7 +23,7 @@ export function usePeriods() {
   const [periods, setPeriods] = useState<Period[] | null>(null);
   const [error, setError] = useState("");
   const reload = () =>
-    rpc<Period[]>("portal_periods", { p_count: 12 })
+    rpc<Period[]>("portal_periods", { p_count: 24 })
       .then(setPeriods)
       .catch((e) => setError(errorText(e, "Não foi possível carregar os períodos.")));
   useEffect(() => {
@@ -32,19 +32,64 @@ export function usePeriods() {
   return { periods, error, reload };
 }
 
-export function PeriodSelect({ periods, value, onChange }: {
+const MONTHS = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro",
+  "Novembro", "Dezembro"];
+
+/** Mes de referencia do periodo: o mes em que ele termina (21/10 a 20/11 = novembro). */
+function refOf(p: Period) {
+  return { year: Number(p.end.slice(0, 4)), month: Number(p.end.slice(5, 7)) };
+}
+
+function daysBetween(a: string, b: string) {
+  return Math.round((Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z")) / 86400000) + 1;
+}
+
+/** Escolha do periodo por ano e mes; o periodo aparece em seguida (inicio, fim e dias). */
+export function PeriodSelect({ periods, value, onChange, status = true }: {
   periods: Period[];
   value: string;
   onChange: (start: string) => void;
+  status?: boolean;
 }) {
+  const current = periods.find((p) => p.start === value) ?? periods[0];
+  const ref = current ? refOf(current) : { year: 0, month: 0 };
+  const years = Array.from(new Set(periods.map((p) => refOf(p).year))).sort((a, b) => b - a);
+  const months = periods.filter((p) => refOf(p).year === ref.year).sort((a, b) => a.end.localeCompare(b.end));
+
+  const pickYear = (year: number) => {
+    const inYear = periods.filter((p) => refOf(p).year === year);
+    const same = inYear.find((p) => refOf(p).month === ref.month);
+    const next = same ?? inYear.sort((a, b) => b.end.localeCompare(a.end))[0];
+    if (next) onChange(next.start);
+  };
+
   return (
-    <select value={value} onChange={(e) => onChange(e.target.value)}>
-      {periods.map((p) => (
-        <option key={p.start} value={p.start}>
-          {br(p.start)} a {br(p.end)}{p.current ? " (atual)" : ""}{p.closed ? " · fechado" : ""}
-        </option>
-      ))}
-    </select>
+    <div className="period-picker">
+      <label>
+        Ano
+        <select value={ref.year} onChange={(e) => pickYear(Number(e.target.value))}>
+          {years.map((y) => <option key={y} value={y}>{y}</option>)}
+        </select>
+      </label>
+      <label>
+        Mês
+        <select value={current?.start ?? ""} onChange={(e) => onChange(e.target.value)}>
+          {months.map((p) => (
+            <option key={p.start} value={p.start}>
+              {MONTHS[refOf(p).month - 1]}{p.current ? " (atual)" : ""}
+            </option>
+          ))}
+        </select>
+      </label>
+      {current && (
+        <div className="period-info" aria-label="Período de apuração">
+          <span className="pinfo strong" title="Início">{br(current.start)}</span>
+          <span className="pinfo" title="Fim">{br(current.end)}</span>
+          <span className="pinfo" title="Dias no período">{daysBetween(current.start, current.end)} dias</span>
+          {!status ? null : current.closed ? <Badge tone="ok">Fechado</Badge> : current.current ? <Badge tone="neutral">Atual</Badge> : null}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -177,10 +222,9 @@ export default function Treatment({ me, goAccount }: { me: Me; goAccount: () => 
       {(periodError || error) && <Banner tone="error">{periodError || error}</Banner>}
 
       <div className="card filters treat-filters">
-        <label>
-          Período
-          {periods ? <PeriodSelect periods={periods} value={start} onChange={setStart} /> : <select disabled />}
-        </label>
+        <div className="period-row">
+          {periods ? <PeriodSelect periods={periods} value={start} onChange={setStart} /> : <Loading />}
+        </div>
         <label className="wide">
           Funcionário
           <input list="treat-employees" value={person} placeholder="Nome ou CPF" onChange={(e) => pick(e.target.value)} />

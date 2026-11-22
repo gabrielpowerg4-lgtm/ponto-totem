@@ -180,10 +180,7 @@ export default function Closing({ mode, me, openTreatment }: {
       {msg && <Banner tone={msg.tone}>{msg.text}</Banner>}
 
       <div className="card closing-head">
-        <label>
-          Período
-          {periods ? <PeriodSelect periods={periods} value={start} onChange={setStart} /> : <select disabled />}
-        </label>
+        {periods ? <PeriodSelect periods={periods} value={start} onChange={setStart} status={false} /> : <Loading />}
         {mode === "close" && <div className="closing-status">
           {period?.closed ? (
             <>

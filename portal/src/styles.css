@@ -528,3 +528,20 @@ table.sheet tr.open td { background: var(--accent-soft); }
 @media (max-width: 640px) {
   .emp-top { grid-template-columns: 1fr; }
 }
+
+/* Escolha do periodo: ano, mes e o periodo informado ao lado */
+.period-picker { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+.period-picker label { margin: 0; }
+.period-picker label:first-child select { width: 110px; }
+.period-picker label:nth-child(2) select { width: 170px; }
+.period-info { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pinfo {
+  display: inline-flex; align-items: center; justify-content: center; min-height: 44px; min-width: 120px;
+  padding: 0 16px; border-radius: var(--radius); background: var(--surface-2); color: var(--text);
+  font-variant-numeric: tabular-nums; border: 1px solid transparent;
+}
+.pinfo.strong { background: var(--surface); border-color: var(--accent); }
+.pinfo:nth-child(3) { min-width: 0; }
+.period-row { grid-column: 1 / -1; }
+.treat-filters { grid-template-columns: 1fr auto; }
+.closing-head { align-items: flex-end; }
