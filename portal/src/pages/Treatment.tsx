@@ -330,6 +330,7 @@ function DayPanel({ day, readOnly, companyId, onChanged }: {
   const [occ, setOcc] = useState({ type: "atestado", to: day.date, minutes: "", reason: "" });
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  const [tab, setTab] = useState<"mark" | "occ">(day.marks.length === 0 && day.expected > 0 ? "occ" : "mark");
 
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -414,151 +415,228 @@ function DayPanel({ day, readOnly, companyId, onChanged }: {
     });
   };
 
+  const eff = day.marks.filter((m) => m.effective);
+  const role = (m: DayMark) => {
+    const i = eff.indexOf(m);
+    if (i < 0) return "–";
+    return `${i % 2 === 0 ? "Entrada" : "Saída"} ${Math.floor(i / 2) + 1}`;
+  };
+  const faceTone = (f: string | null) => (!f ? "neutral" : f === "ROSTO_CONFERE" || f === "VIVACIDADE_OK" ? "ok" : "error");
+
   return (
-    <div className="day-panel">
+    <div className={readOnly ? "day-panel read-only" : "day-panel"}>
       {msg && <Banner tone="error">{msg}</Banner>}
+
+      <div className="dp-summary">
+        <Metric label="Previsto" value={day.expected && !day.future ? fmtMin(day.expected) : "–"} />
+        <Metric label="Trabalhado" value={day.worked ? fmtMin(day.worked) : "–"}
+          note={day.mode === "clt" && day.night ? `${fmtMin(day.night)} noturnas` : undefined} />
+        <Metric label="Saldo" value={<Hours value={day.balance} signed />} note={day.tolerance ? "tolerância" : undefined} />
+        <Metric label="Bônus" value={day.bonus ? <Hours value={day.bonus} signed /> : "–"}
+          note={day.bonus_removed && day.bonus_gross ? "retirado" : undefined} />
+        <Metric label="Banco de horas" value={<Hours value={day.bank_delta} signed />}
+          note={day.bank_delta ? `${day.pct}% se pago` : undefined} />
+        <div className="dp-rule">
+          <Badge tone="neutral">Regra {day.mode === "clt" ? "da CLT" : "do SGI"}</Badge>
+        </div>
+      </div>
+
       <div className="panel-grid">
-        <div>
-          <h3>Marcações</h3>
-          {day.marks.length === 0 ? <p className="muted small">Nenhuma marcação.</p> : (
-            <ul className="mark-list">
-              {day.marks.map((m, i) => (
-                <li key={i}>
-                  <MarkChip m={m} />
-                  <span className="small">
-                    {m.kind === "I" ? <>Incluída · {m.reason}</>
-                      : m.disregard ? <>Desconsiderada · {m.disregard.reason}</>
-                      : <>Original · NSR {m.nsr} · {FACE_LABEL[m.face ?? ""] ?? "–"}{m.online === false ? " · off-line" : ""}</>}
-                  </span>
-                  {!readOnly && (
-                    <button className="link small" disabled={busy} onClick={() => markAction(m)}>
-                      {m.kind === "I" ? "Remover" : m.disregard ? "Voltar a considerar" : "Desconsiderar"}
-                    </button>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
+        <div className="dp-col">
+          <section className="dp-card">
+            <div className="dp-card-head">
+              <h3>Marcações</h3>
+              <span className="muted small">{eff.length} válida{eff.length === 1 ? "" : "s"}</span>
+            </div>
+            {day.marks.length === 0 ? <p className="muted small">Nenhuma marcação neste dia.</p> : (
+              <ul className="dp-marks">
+                {day.marks.map((m, i) => (
+                  <li key={i} className={m.effective ? "" : "off"}>
+                    <span className="dp-role">{role(m)}</span>
+                    <MarkChip m={m} />
+                    <span className="dp-info">
+                      {m.kind === "I" ? (
+                        <><Badge tone="neutral">Incluída</Badge> <span className="small">{m.reason}</span></>
+                      ) : m.disregard ? (
+                        <><Badge tone="neutral">Desconsiderada</Badge> <span className="small">{m.disregard.reason}</span></>
+                      ) : (
+                        <>
+                          <span className="muted small">NSR {m.nsr}</span>
+                          <Badge tone={faceTone(m.face)}>{FACE_LABEL[m.face ?? ""] ?? "Sem validação"}</Badge>
+                          {m.online === false && <Badge tone="warn">Off-line</Badge>}
+                        </>
+                      )}
+                    </span>
+                    {!readOnly && (
+                      <button className="ghost small" disabled={busy} onClick={() => markAction(m)}>
+                        {m.kind === "I" ? "Remover" : m.disregard ? "Voltar a considerar" : "Desconsiderar"}
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
           {day.occurrences.length > 0 && (
-            <>
-              <h3>Ocorrências</h3>
-              <ul className="mark-list">
+            <section className="dp-card">
+              <div className="dp-card-head"><h3>Ocorrências</h3></div>
+              <ul className="dp-marks">
                 {day.occurrences.map((o) => (
                   <li key={o.id}>
                     <span className="chip occ">{OCCURRENCE_LABEL[o.type] ?? o.type}{o.minutes ? ` ${fmtMin(o.minutes)}` : ""}</span>
-                    <span className="small">
+                    <span className="dp-info small">
                       {o.reason}{o.date_from !== o.date_to ? ` · ${br(o.date_from)} a ${br(o.date_to)}` : ""}
+                      {!o.cpf && <span className="muted"> · da empresa, em Feriados</span>}
                     </span>
                     {!readOnly && o.cpf && (
-                      <button className="link small" disabled={busy} onClick={() => {
+                      <button className="ghost small" disabled={busy} onClick={() => {
                         const reason = ask("Motivo para cancelar a ocorrência:");
                         if (reason) run(() => rpc("portal_occurrence_revoke", { p_id: o.id, p_reason: reason }));
                       }}>
                         Cancelar
                       </button>
                     )}
-                    {!o.cpf && <span className="muted small">(da empresa, em Jornadas)</span>}
                   </li>
                 ))}
               </ul>
-            </>
+            </section>
           )}
+
           {(day.bonus_gross > 0 || day.bonus_removed) && (
-            <>
-              <h3>Bônus</h3>
-              <ul className="mark-list">
+            <section className="dp-card">
+              <div className="dp-card-head"><h3>Bônus</h3></div>
+              <ul className="dp-marks">
                 <li>
                   <span className={day.bonus_removed ? "chip off" : "chip incl"}>{fmtMin(day.bonus_gross)}</span>
-                  <span className="small">
+                  <span className="dp-info small">
                     {day.bonus_removed ? <>Retirado · {day.bonus_removed.reason}</> : "30 min a cada hora cheia de extra"}
                   </span>
                   {!readOnly && (
-                    <button className="link small" disabled={busy} onClick={toggleBonus}>
+                    <button className="ghost small" disabled={busy} onClick={toggleBonus}>
                       {day.bonus_removed ? "Devolver bônus" : "Retirar bônus"}
                     </button>
                   )}
                 </li>
               </ul>
-            </>
+            </section>
           )}
-          <h3>Anexos</h3>
-          {day.attachments.length === 0 ? <p className="muted small">Nenhum anexo.</p> : (
-            <ul className="mark-list">
-              {day.attachments.map((a) => (
-                <li key={a.id}>
-                  <button className="link small" onClick={() => openFile(a.path)}>📎 {a.name}</button>
-                  <span className="muted small">{Math.ceil(a.size / 1024)} KB</span>
-                  {!readOnly && (
-                    <button className="link small" disabled={busy} onClick={() => {
-                      const reason = ask(`Motivo para retirar o anexo ${a.name}:`);
-                      if (reason) run(() => rpc("portal_attachment_revoke", { p: { id: a.id, reason } }));
-                    }}>
-                      Retirar
-                    </button>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-          {!readOnly && day.attachments.length < 3 && (
-            <label className="file small">
-              <input type="file" accept="application/pdf,image/jpeg,image/png" disabled={busy}
-                onChange={(e) => { upload(e.target.files?.[0]); e.target.value = ""; }} />
-              Anexar arquivo (PDF, JPG ou PNG, até 5 MB; máximo 3 por dia)
-            </label>
-          )}
-          <p className="muted small">
-            Regra {day.mode === "clt" ? "da CLT" : "do SGI"}. Trabalhado {fmtMin(day.worked_real)} real
-            {day.mode === "clt" && day.night ? `, ${fmtMin(day.night)} noturnas (hora reduzida)` : ""}.
-            {day.bank_delta ? ` Banco de horas: ${fmtMin(day.bank_delta, true)} (${day.pct}% se pago).` : ""}
-          </p>
+
+          <section className="dp-card">
+            <div className="dp-card-head">
+              <h3>Anexos</h3>
+              <span className="muted small">{day.attachments.length} de 3</span>
+            </div>
+            {day.attachments.length > 0 && (
+              <ul className="dp-marks">
+                {day.attachments.map((a) => (
+                  <li key={a.id}>
+                    <button className="link small dp-file" onClick={() => openFile(a.path)}>📎 {a.name}</button>
+                    <span className="dp-info muted small">{Math.ceil(a.size / 1024)} KB</span>
+                    {!readOnly && (
+                      <button className="ghost small" disabled={busy} onClick={() => {
+                        const reason = ask(`Motivo para retirar o anexo ${a.name}:`);
+                        if (reason) run(() => rpc("portal_attachment_revoke", { p: { id: a.id, reason } }));
+                      }}>
+                        Retirar
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {!readOnly && day.attachments.length < 3 ? (
+              <label className={busy ? "dp-upload disabled" : "dp-upload"}>
+                <input type="file" accept="application/pdf,image/jpeg,image/png" disabled={busy}
+                  onChange={(e) => { upload(e.target.files?.[0]); e.target.value = ""; }} />
+                <span className="dp-upload-btn">Anexar arquivo</span>
+                <span className="muted small">PDF, JPG ou PNG, até 5 MB</span>
+              </label>
+            ) : day.attachments.length === 0 ? <p className="muted small">Nenhum anexo.</p> : null}
+          </section>
         </div>
 
         {!readOnly && (
-          <div>
-            <form onSubmit={addMark}>
-              <h3>Incluir marcação</h3>
-              <div className="row">
-                <input type="time" value={include.time} onChange={(e) => setInclude({ ...include, time: e.target.value })} required className="time" />
-                <label className="check">
-                  <input type="checkbox" checked={include.nextDay} onChange={(e) => setInclude({ ...include, nextDay: e.target.checked })} />
-                  dia seguinte
-                </label>
+          <div className="dp-col">
+            <section className="dp-card">
+              <div className="segmented dp-tabs">
+                <button type="button" className={tab === "mark" ? "on" : ""} onClick={() => setTab("mark")}>Incluir marcação</button>
+                <button type="button" className={tab === "occ" ? "on" : ""} onClick={() => setTab("occ")}>Lançar ocorrência</button>
               </div>
-              <input placeholder="Motivo (ex.: esqueceu de marcar a saída)" value={include.reason}
-                onChange={(e) => setInclude({ ...include, reason: e.target.value })} required minLength={3} />
-              <button className="primary small" disabled={busy} type="submit">Incluir</button>
-            </form>
 
-            <form onSubmit={addOcc}>
-              <h3>Lançar ocorrência</h3>
-              <div className="row">
-                <select value={occ.type} onChange={(e) => setOcc({ ...occ, type: e.target.value })}>
-                  {Object.entries(OCCURRENCE_LABEL).filter(([k]) => k !== "feriado").map(([k, v]) => (
-                    <option key={k} value={k}>{v}</option>
-                  ))}
-                </select>
-                {PARTIAL.has(occ.type) ? (
-                  <input type="time" className="time" value={occ.minutes} title="Horas abonadas (vazio = dia inteiro)"
-                    onChange={(e) => setOcc({ ...occ, minutes: e.target.value })} required={occ.type === "abono"} />
-                ) : null}
-              </div>
-              {PARTIAL.has(occ.type) && (
-                <p className="muted small">
-                  {occ.type === "abono" ? "Informe as horas abonadas (ex.: 02:00)." : "Horas do atestado; deixe vazio para o dia inteiro."}
-                </p>
+              {tab === "mark" ? (
+                <form className="dp-form" onSubmit={addMark}>
+                  <div className="dp-fields mark">
+                    <label>
+                      Horário
+                      <input type="time" value={include.time} onChange={(e) => setInclude({ ...include, time: e.target.value })} required />
+                    </label>
+                    <label className="check dp-next">
+                      <input type="checkbox" checked={include.nextDay} onChange={(e) => setInclude({ ...include, nextDay: e.target.checked })} />
+                      Dia seguinte
+                    </label>
+                  </div>
+                  <label>
+                    Motivo
+                    <input placeholder="Ex.: esqueceu de marcar a saída" value={include.reason}
+                      onChange={(e) => setInclude({ ...include, reason: e.target.value })} required minLength={3} />
+                  </label>
+                  <div className="dp-actions">
+                    <button className="primary small" disabled={busy} type="submit">Incluir marcação</button>
+                  </div>
+                </form>
+              ) : (
+                <form className="dp-form" onSubmit={addOcc}>
+                  <div className={PARTIAL.has(occ.type) ? "dp-fields occ partial" : "dp-fields occ"}>
+                    <label>
+                      Tipo
+                      <select value={occ.type} onChange={(e) => setOcc({ ...occ, type: e.target.value })}>
+                        {Object.entries(OCCURRENCE_LABEL).filter(([k]) => k !== "feriado").map(([k, v]) => (
+                          <option key={k} value={k}>{v}</option>
+                        ))}
+                      </select>
+                    </label>
+                    {PARTIAL.has(occ.type) && (
+                      <label>
+                        Horas
+                        <input type="time" value={occ.minutes} onChange={(e) => setOcc({ ...occ, minutes: e.target.value })}
+                          required={occ.type === "abono"} />
+                      </label>
+                    )}
+                    <label>
+                      Até
+                      <input type="date" value={occ.to} min={day.date} onChange={(e) => setOcc({ ...occ, to: e.target.value })} />
+                    </label>
+                  </div>
+                  {PARTIAL.has(occ.type) && (
+                    <p className="muted small dp-hint">
+                      {occ.type === "abono" ? "Informe as horas abonadas (ex.: 02:00)." : "Horas do atestado; deixe vazio para o dia inteiro."}
+                    </p>
+                  )}
+                  <label>
+                    Motivo ou documento
+                    <input placeholder="Ex.: atestado médico entregue ao RH" value={occ.reason}
+                      onChange={(e) => setOcc({ ...occ, reason: e.target.value })} required minLength={3} />
+                  </label>
+                  <div className="dp-actions">
+                    <button className="primary small" disabled={busy} type="submit">Lançar ocorrência</button>
+                  </div>
+                </form>
               )}
-              <label className="inline">
-                Até
-                <input type="date" value={occ.to} min={day.date} onChange={(e) => setOcc({ ...occ, to: e.target.value })} />
-              </label>
-              <input placeholder="Motivo ou documento (ex.: atestado médico entregue ao RH)" value={occ.reason}
-                onChange={(e) => setOcc({ ...occ, reason: e.target.value })} required minLength={3} />
-              <button className="primary small" disabled={busy} type="submit">Lançar</button>
-            </form>
+            </section>
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function Metric({ label, value, note }: { label: string; value: React.ReactNode; note?: string }) {
+  return (
+    <div className="dp-metric">
+      <span className="muted small">{label}</span>
+      <span className="dp-metric-value">{value}</span>
+      {note && <span className="muted small">{note}</span>}
     </div>
   );
 }
