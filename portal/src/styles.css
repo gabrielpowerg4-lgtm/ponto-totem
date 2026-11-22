@@ -455,6 +455,7 @@ input, select, textarea { border-radius: var(--radius); }
 .user-card:hover { background: var(--surface-2); }
 .user-card.active { background: var(--accent); color: #fff; }
 .user-card.active .muted { color: rgb(255 255 255 / 0.8); }
+.user-card.active .strong { color: #fff; }
 .user-card.active .avatar { background: #fff; color: var(--accent); }
 .block { display: block; }
 .avatar.photo { object-fit: cover; padding: 0; }
