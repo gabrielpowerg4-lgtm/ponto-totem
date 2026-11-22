@@ -231,7 +231,7 @@ a.button:hover { background: var(--surface-2); }
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
 th { text-align: left; font-weight: 500; color: var(--muted); font-size: 13px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
-td { padding: 12px 10px; border-bottom: 1px solid var(--border); }
+td { padding: 8px 10px; border-bottom: 1px solid var(--border); }
 tr:last-child td { border-bottom: none; }
 
 .secret { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
