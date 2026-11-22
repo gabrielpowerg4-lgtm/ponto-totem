@@ -232,10 +232,7 @@ export function Documents({ me }: { me: Me }) {
                         </div>
                       </div>
                     </td>
-                    <td>
-                      <div className="strong">{d.type_code}</div>
-                      <div className="muted small">{d.type_name}</div>
-                    </td>
+                    <td title={d.type_name}><span className="strong">{d.type_code}</span></td>
                     <td>{d.site_name ?? <span className="muted">Empresa</span>}</td>
                     <td className="nowrap">{br(d.issued_on)}</td>
                     <td className="nowrap">
