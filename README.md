@@ -82,24 +82,17 @@ Com isso o app trava o aparelho, concede a câmera a si mesmo e abre após reini
 ## Envio de e-mail (SMTP)
 
 O serviço `rep` envia e-mails pela caixa `no-reply@semax-sgi-ponto.eng.br` da Hostinger, com `nodemailer`
-(`supabase/functions/rep/mailer.ts`). A configuração fica só nos secrets da Edge Function
-(Supabase → Project Settings → Edge Functions → Secrets); nada vai para o código nem para o repositório.
+(`supabase/functions/rep/mailer.ts`). A configuração é feita no portal, em Configurações → E-mail (SMTP),
+pelo administrador: servidor, porta, usuário e remetente ficam na tabela `mail_settings`; a senha vai para o
+Supabase Vault e só a função a lê, na hora do envio (`rep_mail_config`, restrita ao `service_role`).
 
-| Variável | Valor |
-|---|---|
-| `SMTP_HOST` | `smtp.hostinger.com` |
-| `SMTP_PORT` | `465` (SSL/TLS implícito). Alternativa: `587` |
-| `SMTP_SECURE` | `true` para 465; `false` para 587 (STARTTLS obrigatório) |
-| `SMTP_USER` | `no-reply@semax-sgi-ponto.eng.br` |
-| `SMTP_PASSWORD` | senha da caixa (secret; nunca no código, nas respostas ou nos logs) |
-| `MAIL_FROM` | `no-reply@semax-sgi-ponto.eng.br` |
-| `MAIL_FROM_NAME` | opcional, padrão `Ponto Totem` |
+Alternativa: os secrets da Edge Function têm prioridade sobre a tela quando `SMTP_HOST` e `SMTP_PASSWORD`
+estão definidos (`SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `MAIL_FROM`, `MAIL_FROM_NAME`).
 
 TLS 1.2 ou superior, certificado verificado, tempo limite de 10 s para conectar e 20 s de socket. Os logs
-registram só o resultado, a porta e o destinatário mascarado (`a***@dominio`).
+registram só o resultado, a porta, a origem da configuração e o destinatário mascarado (`a***@dominio`).
 
-Teste: no portal, Configurações → E-mail (SMTP) → "Enviar e-mail de teste" (administrador, até 5 por hora).
-Os secrets valem na próxima chamada da função; não é preciso publicar de novo depois de alterá-los.
+Teste: na mesma tela, "Enviar e-mail de teste" (administrador, até 5 por hora, registrado na auditoria).
 
 ## Compilar
 

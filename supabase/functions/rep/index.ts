@@ -4,7 +4,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { buildAej, buildAejFull, buildAfd, FiscalError } from "./fiscal.ts";
 import { closingRow, computeAll, type TimesheetData } from "./jornada.ts";
-import { isEmail, MailError, mailConfig, mailReady, maskEmail, sendMail } from "./mailer.ts";
+import { isEmail, MailError, mailConfig, maskEmail, sendMail } from "./mailer.ts";
 
 const db = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -335,10 +335,11 @@ Deno.serve(async (req: Request) => {
       const caller = await portalCaller(req);
       if (!caller) return json(401, { error: "invalid_token" });
       if (caller.role !== "admin") return json(403, { error: "forbidden" });
-      const c = mailConfig();
+      const load = async () => (await db.rpc("rep_mail_config", { p_company: caller.company })).data;
+      const c = await mailConfig(load);
       if (req.method === "GET" && path.endsWith("/status")) {
         return json(200, {
-          configured: mailReady(c), host: c.host, port: c.port, secure: c.secure, user: c.user, from: c.from,
+          configured: c.ready, source: c.source, host: c.host, port: c.port, secure: c.secure, user: c.user, from: c.from,
           password_set: c.hasPassword,
         });
       }
@@ -354,7 +355,7 @@ Deno.serve(async (req: Request) => {
         if ((count ?? 0) >= 5) return json(429, { error: "too_many_attempts" });
         let result: { ok: boolean; code?: string; messageId?: string };
         try {
-          const sent = await sendMail({
+          const sent = await sendMail(load, {
             to,
             subject: "Ponto Totem: teste de envio de e-mail",
             text: "Este é um e-mail de teste do Ponto Totem (portal da Semax).\n\n" +

@@ -164,7 +164,8 @@ const ERRORS: Record<string, string> = {
   invalid_cno: "CNO inválido: informe os 12 números.",
   invalid_responsible_cpf: "CPF do responsável inválido: informe os 11 números.",
   invalid_period: "Período inválido (máximo de 400 dias).",
-  smtp_not_configured: "Envio de e-mail não configurado: faltam variáveis SMTP no servidor (veja a lista nesta tela).",
+  invalid_smtp: "Servidor, porta ou nome do remetente inválido.",
+  smtp_not_configured: "Envio de e-mail não configurado: preencha os dados e a senha nesta tela.",
   smtp_auth: "O servidor de e-mail recusou o usuário ou a senha (SMTP_USER / SMTP_PASSWORD).",
   smtp_connect: "Não foi possível conectar ao servidor de e-mail (host ou porta).",
   smtp_timeout: "O servidor de e-mail não respondeu a tempo.",
@@ -289,8 +290,23 @@ export async function closeEmployee(start: string, end: string, cpf: string) {
   }
 }
 
+export type MailSettings = {
+  host: string;
+  port: 465 | 587;
+  secure: boolean;
+  smtp_user: string;
+  mail_from: string;
+  from_name: string;
+  password_set: boolean;
+  password_set_at: string | null;
+  updated_at?: string;
+  updated_by?: string;
+  saved: boolean;
+};
+
 export type MailStatus = {
   configured: boolean;
+  source: "env" | "portal" | "none";
   host: string;
   port: number;
   secure: boolean;
