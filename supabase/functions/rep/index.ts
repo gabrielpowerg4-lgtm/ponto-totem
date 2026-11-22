@@ -4,6 +4,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { buildAej, buildAejFull, buildAfd, FiscalError } from "./fiscal.ts";
 import { closingRow, computeAll, type TimesheetData } from "./jornada.ts";
+import { isEmail, MailError, mailConfig, mailReady, maskEmail, sendMail } from "./mailer.ts";
 
 const db = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -327,6 +328,52 @@ Deno.serve(async (req: Request) => {
       });
       if (closeError) return failure(closeError);
       return json(200, { ok: true, days: days.length, pending_days: sheets[0].totals.pending_days });
+    }
+
+    // Portal: situacao do envio de e-mail (sem a senha) e teste de envio. Somente administrador.
+    if (path.endsWith("/v1/portal/mail/status") || path.endsWith("/v1/portal/mail/test")) {
+      const caller = await portalCaller(req);
+      if (!caller) return json(401, { error: "invalid_token" });
+      if (caller.role !== "admin") return json(403, { error: "forbidden" });
+      const c = mailConfig();
+      if (req.method === "GET" && path.endsWith("/status")) {
+        return json(200, {
+          configured: mailReady(c), host: c.host, port: c.port, secure: c.secure, user: c.user, from: c.from,
+          password_set: c.hasPassword,
+        });
+      }
+      if (req.method === "POST" && path.endsWith("/test")) {
+        const body = await req.json();
+        const to = String(body.to ?? "").trim().toLowerCase();
+        if (!isEmail(to)) return json(400, { error: "invalid_email" });
+        // No maximo 5 testes por hora por usuario.
+        const since = new Date(Date.now() - 3600_000).toISOString();
+        const actor = "portal:" + (caller.email || caller.id);
+        const { count } = await db.from("audit_log").select("id", { count: "exact", head: true })
+          .eq("actor", actor).eq("action", "email_teste").gte("at", since);
+        if ((count ?? 0) >= 5) return json(429, { error: "too_many_attempts" });
+        let result: { ok: boolean; code?: string; messageId?: string };
+        try {
+          const sent = await sendMail({
+            to,
+            subject: "Ponto Totem: teste de envio de e-mail",
+            text: "Este é um e-mail de teste do Ponto Totem (portal da Semax).\n\n" +
+              "Se você recebeu esta mensagem, o envio por SMTP está funcionando.\n" +
+              `Servidor: ${c.host}, porta ${c.port} (${c.secure ? "SSL/TLS" : "STARTTLS"}).\n` +
+              `Enviado em: ${new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}.\n\n` +
+              "Mensagem automática, não responda.",
+          });
+          result = { ok: true, messageId: sent.messageId };
+        } catch (e) {
+          result = { ok: false, code: e instanceof MailError ? e.code : "smtp_failed" };
+        }
+        await db.from("audit_log").insert({
+          actor, action: "email_teste",
+          detail: { company_id: caller.company, to: maskEmail(to), port: c.port, ok: result.ok, code: result.code ?? null },
+        });
+        return result.ok ? json(200, { ok: true, port: c.port }) : json(502, { error: result.code, port: c.port });
+      }
+      return json(405, { error: "not_found" });
     }
 
     // Portal: arquivos fiscais (somente administrador). AFD de qualquer intervalo; AEJ so de periodo fechado.

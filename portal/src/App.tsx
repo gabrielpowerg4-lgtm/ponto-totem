@@ -14,6 +14,7 @@ import Treatment from "./pages/Treatment";
 import Closing from "./pages/Closing";
 import Mirror from "./pages/Mirror";
 import Fiscal from "./pages/Fiscal";
+import MailPage from "./pages/Mail";
 
 type Theme = "light" | "dark";
 
@@ -208,7 +209,7 @@ function Auth(_: { theme: Theme; toggleTheme: () => void }) {
 type Page = "home" | "punches" | "treatment" | "pending" | "closing" | "bank" | "settlements" | "monthly" |
   "opening" | "mirror" | "afd" | "aej" |
   "audit" | "employees" | "schedules" | "holidays" | "sites" | "terminals" | "company" | "rules" |
-  "users" | "integration" | "account";
+  "users" | "integration" | "email" | "account";
 
 type Item = { page: Page; label: string; admin?: boolean; soon?: boolean };
 type Group = { id: string; label: string; admin?: boolean; items: Item[] };
@@ -244,6 +245,7 @@ const GROUPS: Group[] = [
     { page: "rules", label: "Regras de apuração" },
     { page: "users", label: "Usuários e perfis" },
     { page: "integration", label: "Integração (API)" },
+    { page: "email", label: "E-mail (SMTP)" },
   ] },
 ];
 
@@ -407,6 +409,7 @@ function Portal({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void 
             <Closing mode="close" me={me} openTreatment={(cpf, start) => go("treatment", `cpf=${cpf}&start=${start}`)} />
           )}
           {current === "mirror" && <Mirror me={me} />}
+          {current === "email" && <MailPage />}
           {current === "afd" && <Fiscal key="afd" kind="afd" />}
           {current === "aej" && <Fiscal key="aej" kind="aej" />}
           {current === "bank" && <HourBank key={window.location.hash} />}

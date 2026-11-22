@@ -164,6 +164,13 @@ const ERRORS: Record<string, string> = {
   invalid_cno: "CNO inválido: informe os 12 números.",
   invalid_responsible_cpf: "CPF do responsável inválido: informe os 11 números.",
   invalid_period: "Período inválido (máximo de 400 dias).",
+  smtp_not_configured: "Envio de e-mail não configurado: faltam variáveis SMTP no servidor (veja a lista nesta tela).",
+  smtp_auth: "O servidor de e-mail recusou o usuário ou a senha (SMTP_USER / SMTP_PASSWORD).",
+  smtp_connect: "Não foi possível conectar ao servidor de e-mail (host ou porta).",
+  smtp_timeout: "O servidor de e-mail não respondeu a tempo.",
+  smtp_tls: "Falha na conexão segura (TLS) com o servidor de e-mail.",
+  smtp_rejected: "O servidor de e-mail recusou o destinatário ou a mensagem.",
+  smtp_failed: "O envio do e-mail falhou. Veja o registro do servidor.",
   period_open: "Nenhum funcionário com este período fechado. O AEJ só é gerado depois do fechamento.",
   forbidden: "Somente o administrador pode gerar este arquivo.",
   employer_missing: "Cadastre o CNPJ e a razão social da empresa em Configurações antes de gerar o arquivo.",
@@ -279,6 +286,48 @@ export async function closeEmployee(start: string, end: string, cpf: string) {
     return (await post("/v1/portal/periods/close-employee", { start, end, cpf }, true)) as { days: number; pending_days: number };
   } catch (e) {
     throw new Error(errorText(e, "Não foi possível fechar o funcionário."));
+  }
+}
+
+export type MailStatus = {
+  configured: boolean;
+  host: string;
+  port: number;
+  secure: boolean;
+  user: string;
+  from: string;
+  password_set: boolean;
+};
+
+async function authed(method: "GET" | "POST", path: string, body?: unknown): Promise<Record<string, unknown>> {
+  if (method === "POST") return post(path, body ?? {}, true);
+  const { data } = await supabase.auth.getSession();
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, { headers: { Authorization: `Bearer ${data.session?.access_token ?? ""}` } });
+  } catch {
+    throw new Error("Não foi possível falar com o servidor.");
+  }
+  const out = await res.json().catch(() => ({}));
+  if (res.ok) return out;
+  throw new Error(String(out.error ?? "failed"));
+}
+
+/** Situacao do envio de e-mail (a senha nunca vem do servidor). Somente administrador. */
+export async function mailStatus(): Promise<MailStatus> {
+  try {
+    return (await authed("GET", "/v1/portal/mail/status")) as unknown as MailStatus;
+  } catch (e) {
+    throw new Error(errorText(e, "Não foi possível ler a configuração de e-mail."));
+  }
+}
+
+/** Envia o e-mail de teste para um endereco informado pelo administrador. */
+export async function mailTest(to: string): Promise<void> {
+  try {
+    await authed("POST", "/v1/portal/mail/test", { to });
+  } catch (e) {
+    throw new Error(errorText(e, "Não foi possível enviar o e-mail de teste."));
   }
 }
 
