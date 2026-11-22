@@ -19,11 +19,12 @@ export function useLoad<T>(load: () => Promise<T>, deps: unknown[] = []) {
 export function PageHead({ title, lead, actions }: { title: string; lead?: string; actions?: ReactNode }) {
   return (
     <div className="page-head">
-      <div>
+      <div className="page-bar">
+        <span className="page-grid" aria-hidden="true"><i /><i /><i /><i /></span>
         <h1>{title}</h1>
-        {lead && <p className="muted">{lead}</p>}
+        {actions && <div className="page-actions">{actions}</div>}
       </div>
-      {actions && <div className="page-actions">{actions}</div>}
+      {lead && <p className="muted page-lead">{lead}</p>}
     </div>
   );
 }

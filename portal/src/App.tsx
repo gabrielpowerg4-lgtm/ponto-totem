@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { API_BASE, firstAccess, formatDateTime, rpc, setTimezone, signupAdmin, supabase, type Me, type Summary } from "./api";
+import { API_BASE, SUPABASE_URL, firstAccess, formatDateTime, rpc, setTimezone, signupAdmin, supabase, type Me, type Summary } from "./api";
 import { PageHead, Stat } from "./ui";
 import Punches from "./pages/Punches";
 import { Employees, Sites, Terminals } from "./pages/Registers";
@@ -17,7 +17,7 @@ function useTheme(): [Theme, () => void] {
   const initial = (): Theme => {
     const saved = localStorage.getItem("theme");
     if (saved === "light" || saved === "dark") return saved;
-    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    return "light";
   };
   const [theme, setTheme] = useState<Theme>(initial);
   useEffect(() => {
@@ -31,12 +31,30 @@ function useTheme(): [Theme, () => void] {
   return [theme, () => setTheme(theme === "dark" ? "light" : "dark")];
 }
 
-function Logo() {
+const LOGO_URL = `${SUPABASE_URL}/storage/v1/object/public/publico/marca/logo-semax.jpg`;
+
+function Logo({ big = false }: { big?: boolean }) {
+  return <img className={big ? "brand-logo big" : "brand-logo"} src={LOGO_URL} alt="Semax Engenharia" />;
+}
+
+// Icones do menu (traco simples, como no SGI).
+const ICONS: Record<string, string> = {
+  home: "M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z",
+  ponto: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm0 4v5l3.5 2",
+  banco: "M3 10l9-6 9 6M5 10v8m4.7-8v8m4.6-8v8M19 10v8M3 20h18",
+  relatorios: "M7 3h7l5 5v13H7zM14 3v5h5M10 13h6M10 17h6",
+  cadastros: "M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm-6 10a6 6 0 0 1 12 0M17 11a3 3 0 1 0 0-6M21 21a5 5 0 0 0-4-4.9",
+  config: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm7.4-3a7.4 7.4 0 0 0-.1-1.3l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2.2-1.3L14.3 2h-4l-.4 2.5a7 7 0 0 0-2.2 1.3l-2.4-1-2 3.4 2 1.6a7.4 7.4 0 0 0 0 2.6l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2.2 1.3l.4 2.5h4l.4-2.5a7 7 0 0 0 2.2-1.3l2.4 1 2-3.4-2-1.6c.1-.4.1-.9.1-1.3z",
+  conta: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm-7 9a7 7 0 0 1 14 0",
+  sair: "M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4M10 17l5-5-5-5M15 12H3",
+  tema: "M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z",
+};
+
+export function Icon({ name }: { name: string }) {
   return (
-    <svg width="28" height="28" viewBox="0 0 32 32" aria-hidden="true">
-      <rect width="32" height="32" rx="8" fill="var(--accent)" />
-      <circle cx="16" cy="16" r="8" fill="none" stroke="white" strokeWidth="2.5" />
-      <path d="M16 11v5l3.5 2.5" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" />
+    <svg className="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d={ICONS[name] ?? ""} />
     </svg>
   );
 }
@@ -67,7 +85,7 @@ export default function App() {
 // Entrada e primeiro acesso
 // ---------------------------------------------------------------------------
 
-function Auth({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void }) {
+function Auth(_: { theme: Theme; toggleTheme: () => void }) {
   const [mode, setMode] = useState<"login" | "employee" | "company">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -105,15 +123,9 @@ function Auth({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void })
   return (
     <div className="auth">
       <div className="auth-card">
-        <div className="brand">
-          <Logo />
-          <div>
-            <div className="brand-name">Ponto Totem</div>
-            <div className="muted small">Portal de tratamento do ponto</div>
-          </div>
-          <button className="ghost small" onClick={toggleTheme} type="button">
-            {theme === "dark" ? "Tema claro" : "Tema escuro"}
-          </button>
+        <div className="auth-brand">
+          <Logo big />
+          <div className="muted small">Ponto Totem · portal de tratamento do ponto</div>
         </div>
         <h1>{mode === "login" ? "Entrar" : mode === "employee" ? "Primeiro acesso" : "Primeiro administrador"}</h1>
         {mode === "employee" && (
@@ -318,22 +330,19 @@ function Portal({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void 
   return (
     <div className="layout">
       <aside className={menuOpen ? "sidebar open" : "sidebar"}>
-        <div className="brand">
+        <div className="sidebar-brand">
           <Logo />
-          <div>
-            <div className="brand-name">{me.company}</div>
-            <div className="muted small">Ponto Totem</div>
-          </div>
+          <div className="muted small">Ponto Totem</div>
         </div>
         <nav>
           <button className={current === "home" ? "nav-item top active" : "nav-item top"} onClick={() => go("home")}>
-            Início
+            <Icon name="home" /><span>Início</span>
           </button>
           {groups.map((g) => (
             <div key={g.id} className="nav-group">
               <button className={currentGroup === g.id ? "nav-head current" : "nav-head"} onClick={() => toggleGroup(g.id)}
                 aria-expanded={isOpen(g.id)}>
-                <span>{g.label}</span>
+                <span className="nav-label"><Icon name={g.id} />{g.label}</span>
                 <span className={isOpen(g.id) ? "chev open" : "chev"} aria-hidden="true">›</span>
               </button>
               {isOpen(g.id) && (
@@ -350,14 +359,22 @@ function Portal({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void 
           ))}
         </nav>
         <div className="sidebar-foot">
-          <button className={current === "account" ? "nav-item active" : "nav-item"} onClick={() => go("account")}>
-            Minha conta
-          </button>
-          <div className="muted small ellipsis">{me.email}</div>
-          <div className="row">
-            <button className="ghost small" onClick={toggleTheme}>{theme === "dark" ? "Tema claro" : "Tema escuro"}</button>
-            <button className="ghost small" onClick={signOut}>Sair</button>
+          <div className="user-card">
+            <span className="avatar">{(me.employee_name || me.email).trim().charAt(0).toUpperCase()}</span>
+            <div className="user-text">
+              <div className="strong ellipsis">{me.employee_name || me.email.split("@")[0]}</div>
+              <div className="muted small ellipsis">{me.company}</div>
+            </div>
           </div>
+          <button className={current === "account" ? "nav-item foot active" : "nav-item foot"} onClick={() => go("account")}>
+            <Icon name="conta" /><span>Minha conta</span>
+          </button>
+          <button className="nav-item foot" onClick={toggleTheme}>
+            <Icon name="tema" /><span>{theme === "dark" ? "Tema claro" : "Tema escuro"}</span>
+          </button>
+          <button className="nav-item foot" onClick={signOut}>
+            <Icon name="sair" /><span>Sair</span>
+          </button>
         </div>
       </aside>
       {menuOpen && <div className="scrim" onClick={() => setMenuOpen(false)} />}
