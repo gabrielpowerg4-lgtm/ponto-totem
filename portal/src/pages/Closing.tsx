@@ -4,7 +4,7 @@ import { ALERTS, computeAll, FLAG_LABEL, fmtMin, type Sheet, type TimesheetData 
 import { askConfirm, askText, Badge, Banner, Empty, Loading, PageHead } from "../ui";
 import { Hours, PeriodSelect, usePeriods } from "./Treatment";
 
-type Mode = "pending" | "close" | "report";
+type Mode = "pending" | "close";
 
 const TEXT: Record<Mode, { title: string; lead: string }> = {
   pending: {
@@ -14,10 +14,6 @@ const TEXT: Record<Mode, { title: string; lead: string }> = {
   close: {
     title: "Fechamento",
     lead: "Feche o período depois de tratar as pendências. O período fechado é o que vai para o Espelho de Ponto, o AEJ e o Bubble.",
-  },
-  report: {
-    title: "Apuração do período",
-    lead: "Totais de cada funcionário no período: previsto, trabalhado, noturnas, extras, faltas e banco de horas.",
   },
 };
 
@@ -30,7 +26,7 @@ export default function Closing({ mode, me, openTreatment }: {
   const [start, setStart] = useState("");
   const [data, setData] = useState<TimesheetData | null>(null);
   const [error, setError] = useState("");
-  const [show, setShow] = useState<"pending" | "all">(mode === "report" ? "all" : "pending");
+  const [show, setShow] = useState<"pending" | "all">("pending");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ tone: "ok" | "error" | "warn"; text: string } | null>(null);
 
@@ -183,7 +179,7 @@ export default function Closing({ mode, me, openTreatment }: {
       <PageHead
         title={TEXT[mode].title}
         lead={TEXT[mode].lead}
-        actions={mode === "report" && sheets.length > 0 && <button className="ghost" onClick={exportCsv}>Exportar CSV</button>}
+        actions={mode === "close" && sheets.length > 0 && <button className="ghost" onClick={exportCsv}>Exportar apuração (CSV)</button>}
       />
       {(periodError || error) && <Banner tone="error">{periodError || error}</Banner>}
       {msg && <Banner tone={msg.tone}>{msg.text}</Banner>}
@@ -349,9 +345,6 @@ export default function Closing({ mode, me, openTreatment }: {
                       <th>Alertas</th>
                       <th className="num">Previsto</th>
                       <th className="num">Trabalhado</th>
-                      {mode === "report" && <th className="num">Noturnas</th>}
-                      {mode === "report" && <th className="num">Extras</th>}
-                      {mode === "report" && <th className="num">Faltas</th>}
                       <th className="num">Saldo</th>
                       <th className="num">Banco final</th>
                       <th />
@@ -367,9 +360,6 @@ export default function Closing({ mode, me, openTreatment }: {
                         <td><Alerts sheet={s} /></td>
                         <td className="num">{fmtMin(s.totals.expected)}</td>
                         <td className="num">{fmtMin(s.totals.worked)}</td>
-                        {mode === "report" && <td className="num">{fmtMin(s.totals.night)}</td>}
-                        {mode === "report" && <td className="num">{fmtMin(s.totals.extra)}</td>}
-                        {mode === "report" && <td className="num">{fmtMin(s.totals.missing)}</td>}
                         <td className="num"><Hours value={s.totals.extra - s.totals.missing} signed /></td>
                         <td className="num"><Hours value={s.totals.bank_after} signed /></td>
                         <td className="right">

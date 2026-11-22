@@ -205,7 +205,7 @@ function Auth(_: { theme: Theme; toggleTheme: () => void }) {
 
 type Page = "home" | "punches" | "treatment" | "pending" | "closing" | "bank" | "settlements" | "monthly" |
   "opening" | "mirror" | "afd" | "aej" |
-  "report" | "audit" | "employees" | "schedules" | "holidays" | "sites" | "terminals" | "company" | "rules" |
+  "audit" | "employees" | "schedules" | "holidays" | "sites" | "terminals" | "company" | "rules" |
   "users" | "integration" | "account";
 
 type Item = { page: Page; label: string; admin?: boolean; soon?: boolean };
@@ -228,7 +228,6 @@ const GROUPS: Group[] = [
     { page: "mirror", label: "Espelho de Ponto", soon: true },
     { page: "afd", label: "AFD", soon: true },
     { page: "aej", label: "AEJ", soon: true },
-    { page: "report", label: "Apuração do período" },
     { page: "audit", label: "Auditoria", admin: true },
   ] },
   { id: "cadastros", label: "Cadastros", items: [
@@ -329,7 +328,8 @@ function Portal({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void 
     ...g, items: g.items.filter((i) => !i.admin || admin),
   }));
   const allowed = ["home", "account", ...groups.flatMap((g) => g.items.filter((i) => !i.soon).map((i) => i.page))];
-  const current: Page = allowed.includes(page) ? page : "home";
+  const wanted = (page as string) === "report" ? "closing" : page; // link antigo da Apuracao do periodo
+  const current: Page = allowed.includes(wanted) ? wanted : "home";
   const currentGroup = groups.find((g) => g.items.some((i) => i.page === current))?.id;
   // Aberto por padrao: o grupo da pagina atual; os demais conforme o usuario deixou.
   function isOpen(id: string) {
@@ -403,9 +403,6 @@ function Portal({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void 
           )}
           {current === "closing" && (
             <Closing mode="close" me={me} openTreatment={(cpf, start) => go("treatment", `cpf=${cpf}&start=${start}`)} />
-          )}
-          {current === "report" && (
-            <Closing mode="report" me={me} openTreatment={(cpf, start) => go("treatment", `cpf=${cpf}&start=${start}`)} />
           )}
           {current === "bank" && <HourBank key={window.location.hash} />}
           {current === "settlements" && <Settlements me={me} goAccount={() => go("account")} />}
