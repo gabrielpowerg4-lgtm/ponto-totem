@@ -376,7 +376,7 @@ function Portal({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void 
               : <span className="avatar">{(me.employee_name || me.email).trim().charAt(0).toUpperCase()}</span>}
             <span className="user-text">
               <span className="strong ellipsis block">{me.employee_name || me.email.split("@")[0]}</span>
-              <span className="muted small ellipsis block">Meus dados · {me.company}</span>
+              <span className="muted small ellipsis block">{me.company}</span>
             </span>
           </button>
           <button className="nav-item foot" onClick={toggleTheme}>
