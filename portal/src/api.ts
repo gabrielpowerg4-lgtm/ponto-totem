@@ -176,7 +176,7 @@ const ERRORS: Record<string, string> = {
   attachment_limit: "O dia já tem 3 anexos.",
   invalid_file: "Não foi possível enviar o arquivo (PDF, JPG ou PNG, até 5 MB).",
   settled_after_close: "Houve pagamento ou desconto depois deste fechamento. Estorne-o antes de reabrir.",
-  previous_open: "O período anterior deste funcionário ainda está aberto. Feche-o antes.",
+  previous_open: "O período anterior ainda está aberto. Feche os períodos em ordem, do mais antigo para o mais recente.",
   company_closed: "O período da empresa está fechado. Reabra o período antes de reabrir o funcionário.",
   clt_date_closed: "A data das regras da CLT não pode ficar dentro de um período já fechado.",
   invalid_code: "Código inválido: use letras, números, - ou _ (até 30).",

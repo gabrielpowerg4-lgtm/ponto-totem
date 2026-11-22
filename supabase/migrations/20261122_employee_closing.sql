@@ -93,6 +93,14 @@ begin
      or exists (select 1 from public.employee_closures where company_id = v_company and start_date > p_end) then
     raise exception 'period_closed';
   end if;
+  -- Ordem cronologica: se ja houve fechamento antes, o periodo anterior precisa estar fechado.
+  if exists (select 1 from public.closed_periods where company_id = v_company and start_date < p_start)
+     or exists (select 1 from public.employee_closures where company_id = v_company and start_date < p_start) then
+    if not exists (select 1 from public.closed_periods where company_id = v_company
+                   and start_date = (select start_date from public.rep_period_of(v_company, p_start - 1))) then
+      raise exception 'previous_open';
+    end if;
+  end if;
 
   insert into public.timesheet_days (company_id, cpf, day, period_start, schedule_code, expected, worked,
                                      night, balance, bank_delta, flags, data)
