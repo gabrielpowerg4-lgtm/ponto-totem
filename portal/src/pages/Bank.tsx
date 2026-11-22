@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { br, download, errorText, formatCpf, rpc, todayIso, type Employee, type Me } from "../api";
 import { fmtMin } from "../jornada";
-import { Badge, Banner, Empty, Loading, PageHead, useLoad } from "../ui";
+import { askText, Badge, Banner, Empty, Loading, PageHead, useLoad } from "../ui";
 import { hashParams, Hours } from "./Treatment";
 
 // Banco de horas por lotes: cada dia fechado gera um lote com data, vencimento e percentual.
@@ -399,7 +399,7 @@ export function Settlements({ me, goAccount }: { me: Me; goAccount: () => void }
   };
 
   const revoke = async (s: SettlementRow) => {
-    const reason = window.prompt(`Motivo para estornar o ${s.kind} de ${fmtMin(s.minutes)} de ${s.name}:`);
+    const reason = await askText(`Motivo para estornar o ${s.kind} de ${fmtMin(s.minutes)} de ${s.name}:`);
     if (!reason || reason.trim().length < 3) return;
     try {
       await rpc("portal_bank_settlement_revoke", { p: { id: s.id, reason } });

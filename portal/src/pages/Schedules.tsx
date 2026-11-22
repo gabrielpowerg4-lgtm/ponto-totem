@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { br, errorText, rpc, WEEKDAY_FULL, type Holiday, type Me, type ScheduleRow } from "../api";
 import { fmtClock, fmtMin, unwrap } from "../jornada";
-import { Banner, Empty, Loading, PageHead, useLoad } from "../ui";
+import { askText, Banner, Empty, Loading, PageHead, useLoad } from "../ui";
 
 type Form = { id?: string; code: string; name: string; days: string[]; active: boolean };
 
@@ -195,7 +195,7 @@ export function Holidays() {
   };
 
   const remove = async (h: Holiday) => {
-    const reason = window.prompt(`Motivo para remover o feriado de ${br(h.date_from)}:`);
+    const reason = await askText(`Motivo para remover o feriado de ${br(h.date_from)}:`);
     if (!reason) return;
     setMsg("");
     try {

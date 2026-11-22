@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { createRoot } from "react-dom/client";
 import { errorText } from "./api";
 
 /** Carrega dados e devolve [dados, erro, recarregar, definir]. */
@@ -53,4 +54,49 @@ export function Loading() {
 
 export function Empty({ children }: { children: ReactNode }) {
   return <p className="muted empty">{children}</p>;
+}
+
+// ---------------------------------------------------------------------------
+// Caixa para pedir um texto (motivo). Substitui window.prompt, que nao funciona em todos os navegadores
+// (o navegador do aplicativo desktop, por exemplo, nao exibe prompt).
+// ---------------------------------------------------------------------------
+
+type AskOptions = { optional?: boolean; min?: number; placeholder?: string; confirmLabel?: string; title?: string };
+
+function AskDialog({ message, opts, done }: { message: string; opts: AskOptions; done: (v: string | null) => void }) {
+  const [value, setValue] = useState("");
+  const min = opts.optional ? 0 : opts.min ?? 3;
+  const ok = value.trim().length >= min;
+  return (
+    <div className="ask-scrim" onClick={() => done(null)}>
+      <form className="ask-box" onClick={(e) => e.stopPropagation()}
+        onSubmit={(e) => { e.preventDefault(); if (ok) done(value.trim()); }}>
+        <h2>{opts.title ?? "Informe o motivo"}</h2>
+        <p>{message}</p>
+        <textarea autoFocus rows={3} value={value} placeholder={opts.placeholder ?? "Escreva aqui"}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (ok) done(value.trim()); } if (e.key === "Escape") done(null); }} />
+        {!opts.optional && <span className="hint">Pelo menos {min} letras. Fica registrado na auditoria.</span>}
+        <div className="ask-actions">
+          <button type="button" className="ghost" onClick={() => done(null)}>Cancelar</button>
+          <button type="submit" className="primary" disabled={!ok}>{opts.confirmLabel ?? "Confirmar"}</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+/** Pede um texto ao usuario. Devolve null se cancelar. */
+export function askText(message: string, opts: AskOptions = {}): Promise<string | null> {
+  return new Promise((resolve) => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    const done = (v: string | null) => {
+      root.unmount();
+      host.remove();
+      resolve(v);
+    };
+    root.render(<AskDialog message={message} opts={opts} done={done} />);
+  });
 }

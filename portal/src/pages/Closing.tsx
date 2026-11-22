@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { br, closeEmployee, closePeriod, download, errorText, formatCpf, rpc, todayIso, type Me } from "../api";
 import { ALERTS, computeAll, FLAG_LABEL, fmtMin, type Sheet, type TimesheetData } from "../jornada";
-import { Badge, Banner, Empty, Loading, PageHead } from "../ui";
+import { askText, Badge, Banner, Empty, Loading, PageHead } from "../ui";
 import { Hours, PeriodSelect, usePeriods } from "./Treatment";
 
 type Mode = "pending" | "close" | "report";
@@ -84,7 +84,7 @@ export default function Closing({ mode, me, openTreatment }: {
 
   const reopenOne = async (s: Sheet) => {
     if (!period) return;
-    const reason = window.prompt(`Motivo para reabrir o período de ${s.name}:`);
+    const reason = await askText(`Motivo para reabrir o período de ${s.name}:`);
     if (!reason || reason.trim().length < 3) return;
     setRowBusy(s.cpf);
     setMsg(null);
@@ -148,7 +148,7 @@ export default function Closing({ mode, me, openTreatment }: {
 
   const reopen = async () => {
     if (!period) return;
-    const reason = window.prompt(`Motivo para reabrir o período de ${br(period.start)} a ${br(period.end)}:`);
+    const reason = await askText(`Motivo para reabrir o período de ${br(period.start)} a ${br(period.end)}:`);
     if (!reason || reason.trim().length < 3) return;
     setBusy(true);
     setMsg(null);
@@ -426,7 +426,7 @@ function Notices() {
   }, []);
 
   const done = async (n: Notice) => {
-    const note = window.prompt("O que foi feito? (opcional)") ?? null;
+    const note = await askText("O que foi feito? (opcional)", { optional: true, title: "Aviso resolvido", confirmLabel: "Marcar resolvido" });
     if (note === null) return;
     setError("");
     try {

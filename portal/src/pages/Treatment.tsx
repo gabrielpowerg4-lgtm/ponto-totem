@@ -7,7 +7,7 @@ import {
   ALERTS, computeEmployee, FLAG_LABEL, fmtClock, fmtMin, OCCURRENCE_LABEL, type Day, type DayMark,
   type TimesheetData,
 } from "../jornada";
-import { Badge, Banner, Empty, Loading, PageHead } from "../ui";
+import { askText, Badge, Banner, Empty, Loading, PageHead } from "../ui";
 
 // ---------------------------------------------------------------------------
 // Periodos (compartilhado com a tela de fechamento)
@@ -190,7 +190,7 @@ export default function Treatment({ me, goAccount }: { me: Me; goAccount: () => 
 
   const reopenOne = async () => {
     if (!period || !sheet) return;
-    const reason = window.prompt(`Motivo para reabrir o período de ${sheet.name}:`);
+    const reason = await askText(`Motivo para reabrir o período de ${sheet.name}:`);
     if (!reason || reason.trim().length < 3) return;
     setClosing(true);
     setCloseMsg(null);
@@ -460,31 +460,33 @@ function DayPanel({ day, readOnly, companyId, onChanged }: {
     setBusy(false);
   };
 
-  const ask = (question: string) => {
-    const r = window.prompt(question);
-    return r && r.trim().length >= 3 ? r.trim() : null;
-  };
+  const ask = (question: string) => askText(question);
 
   const markAction = (m: DayMark) => {
     if (m.kind === "I") {
-      const reason = ask(`Motivo para remover a marcação incluída às ${fmtClock(m.at_min)}:`);
-      if (reason) run(() => rpc("portal_adjust_revoke", { p_id: m.adj_id, p_reason: reason }));
+      void ask(`Motivo para remover a marcação incluída às ${fmtClock(m.at_min)}:`).then((reason) => {
+        if (reason) run(() => rpc("portal_adjust_revoke", { p_id: m.adj_id, p_reason: reason }));
+      });
     } else if (m.disregard) {
-      const reason = ask(`Motivo para voltar a considerar a marcação das ${fmtClock(m.at_min)}:`);
-      if (reason) run(() => rpc("portal_adjust_revoke", { p_id: m.disregard!.id, p_reason: reason }));
+      void ask(`Motivo para voltar a considerar a marcação das ${fmtClock(m.at_min)}:`).then((reason) => {
+        if (reason) run(() => rpc("portal_adjust_revoke", { p_id: m.disregard!.id, p_reason: reason }));
+      });
     } else {
-      const reason = ask(`Motivo para desconsiderar a marcação das ${fmtClock(m.at_min)} (NSR ${m.nsr}):`);
-      if (reason) run(() => rpc("portal_mark_disregard", { p_nsr: m.nsr, p_reason: reason }));
+      void ask(`Motivo para desconsiderar a marcação das ${fmtClock(m.at_min)} (NSR ${m.nsr}):`).then((reason) => {
+        if (reason) run(() => rpc("portal_mark_disregard", { p_nsr: m.nsr, p_reason: reason }));
+      });
     }
   };
 
   const faceAction = (m: DayMark) => {
     if (m.face_confirm) {
-      const reason = ask(`Motivo para desfazer a confirmação do rosto na marcação das ${fmtClock(m.at_min)}:`);
-      if (reason) run(() => rpc("portal_face_confirm_revoke", { p: { id: m.face_confirm!.id, reason } }));
+      void ask(`Motivo para desfazer a confirmação do rosto na marcação das ${fmtClock(m.at_min)}:`).then((reason) => {
+        if (reason) run(() => rpc("portal_face_confirm_revoke", { p: { id: m.face_confirm!.id, reason } }));
+      });
     } else {
-      const reason = ask(`Como a identidade foi confirmada na marcação das ${fmtClock(m.at_min)}? (ex.: confirmado com o responsável da obra)`);
-      if (reason) run(() => rpc("portal_face_confirm", { p: { nsr: m.nsr, reason } }));
+      void ask(`Como a identidade foi confirmada na marcação das ${fmtClock(m.at_min)}? (ex.: confirmado com o responsável da obra)`).then((reason) => {
+        if (reason) run(() => rpc("portal_face_confirm", { p: { nsr: m.nsr, reason } }));
+      });
     }
   };
 
@@ -499,11 +501,13 @@ function DayPanel({ day, readOnly, companyId, onChanged }: {
 
   const toggleBonus = () => {
     if (day.bonus_removed) {
-      const reason = ask("Motivo para devolver o bônus do dia:");
-      if (reason) run(() => rpc("portal_bonus_restore", { p: { id: day.bonus_removed!.id, reason } }));
+      void ask("Motivo para devolver o bônus do dia:").then((reason) => {
+        if (reason) run(() => rpc("portal_bonus_restore", { p: { id: day.bonus_removed!.id, reason } }));
+      });
     } else {
-      const reason = ask(`Motivo para retirar o bônus de ${fmtMin(day.bonus_gross)} do dia:`);
-      if (reason) run(() => rpc("portal_bonus_remove", { p: { cpf: day.cpf, date: day.date, reason } }));
+      void ask(`Motivo para retirar o bônus de ${fmtMin(day.bonus_gross)} do dia:`).then((reason) => {
+        if (reason) run(() => rpc("portal_bonus_remove", { p: { cpf: day.cpf, date: day.date, reason } }));
+      });
     }
   };
 
@@ -631,8 +635,9 @@ function DayPanel({ day, readOnly, companyId, onChanged }: {
                     </span>
                     {!readOnly && o.cpf && (
                       <button className="ghost small" disabled={busy} onClick={() => {
-                        const reason = ask("Motivo para cancelar a ocorrência:");
-                        if (reason) run(() => rpc("portal_occurrence_revoke", { p_id: o.id, p_reason: reason }));
+                        void ask("Motivo para cancelar a ocorrência:").then((reason) => {
+                          if (reason) run(() => rpc("portal_occurrence_revoke", { p_id: o.id, p_reason: reason }));
+                        });
                       }}>
                         Cancelar
                       </button>
@@ -675,8 +680,9 @@ function DayPanel({ day, readOnly, companyId, onChanged }: {
                     <span className="dp-info muted small">{Math.ceil(a.size / 1024)} KB</span>
                     {!readOnly && (
                       <button className="ghost small" disabled={busy} onClick={() => {
-                        const reason = ask(`Motivo para retirar o anexo ${a.name}:`);
-                        if (reason) run(() => rpc("portal_attachment_revoke", { p: { id: a.id, reason } }));
+                        void ask(`Motivo para retirar o anexo ${a.name}:`).then((reason) => {
+                          if (reason) run(() => rpc("portal_attachment_revoke", { p: { id: a.id, reason } }));
+                        });
                       }}>
                         Retirar
                       </button>
