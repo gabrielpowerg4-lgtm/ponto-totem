@@ -115,10 +115,11 @@ export default function Closing({ mode, me, openTreatment }: {
   const [query, setQuery] = useState("");
   const [onlyOpen, setOnlyOpen] = useState(false);
   const match = (s: Sheet) => {
-    const q = query.trim().toLowerCase();
+    const plain = (v: string) => v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    const q = plain(query.trim());
     if (!q) return true;
     const digits = q.replace(/\D/g, "");
-    return s.name.toLowerCase().includes(q) || (digits !== "" && s.cpf.includes(digits));
+    return plain(s.name).includes(q) || (digits !== "" && digits.length === q.replace(/[.\-\s]/g, "").length && s.cpf.includes(digits));
   };
   const list = (show === "pending" ? sheets.filter((s) => s.totals.pending_days > 0) : sheets).filter(match);
   const finished = period ? period.end <= todayIso() : false;
