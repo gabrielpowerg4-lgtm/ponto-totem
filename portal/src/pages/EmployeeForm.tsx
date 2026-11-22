@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { errorText, formatCpf, rpc, supabase, type Employee, type Me, type Site } from "../api";
 import { askConfirm, Banner } from "../ui";
+import { EmployeeDocs } from "./Documents";
 
 // Cadastro do funcionario no portal: dados pessoais, contrato, obras e perfis.
 // Inclusao, troca de nome e desligamento geram o registro tipo 5 do AFD, com o seu CPF como responsavel.
@@ -265,6 +266,12 @@ export default function EmployeeForm({ me, employee, sites, onClose, onSaved }: 
               Responsável pelo tablet na obra
             </label>
           </div>
+          {!form.new && (
+            <>
+              <h3>Documentos</h3>
+              <EmployeeDocs cpf={form.cpf} />
+            </>
+          )}
         </div>
 
         {msg && <Banner tone="error">{msg}</Banner>}

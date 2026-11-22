@@ -15,6 +15,7 @@ import Closing from "./pages/Closing";
 import Mirror from "./pages/Mirror";
 import Fiscal from "./pages/Fiscal";
 import MailPage from "./pages/Mail";
+import { DocTypes, Documents } from "./pages/Documents";
 
 type Theme = "light" | "dark";
 
@@ -53,6 +54,7 @@ const ICONS: Record<string, string> = {
   conta: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm-7 9a7 7 0 0 1 14 0",
   sair: "M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4M10 17l5-5-5-5M15 12H3",
   tema: "M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z",
+  documentos: "M9 3h6l1 2h3v16H5V5h3zM9 11l2 2 4-4M8 17h8",
 };
 
 export function Icon({ name }: { name: string }) {
@@ -209,7 +211,7 @@ function Auth(_: { theme: Theme; toggleTheme: () => void }) {
 type Page = "home" | "punches" | "treatment" | "pending" | "closing" | "bank" | "settlements" | "monthly" |
   "opening" | "mirror" | "afd" | "aej" |
   "audit" | "employees" | "schedules" | "holidays" | "sites" | "terminals" | "company" | "rules" |
-  "users" | "integration" | "email" | "account";
+  "users" | "integration" | "email" | "documents" | "doctypes" | "account";
 
 type Item = { page: Page; label: string; admin?: boolean; soon?: boolean };
 type Group = { id: string; label: string; admin?: boolean; items: Item[] };
@@ -226,6 +228,10 @@ const GROUPS: Group[] = [
     { page: "settlements", label: "Quitação" },
     { page: "monthly", label: "Consolidado mensal" },
     { page: "opening", label: "Saldo de abertura", admin: true },
+  ] },
+  { id: "documentos", label: "Documentos", items: [
+    { page: "documents", label: "Vencimentos" },
+    { page: "doctypes", label: "Tipos de documento", admin: true },
   ] },
   { id: "relatorios", label: "Relatórios e arquivos", items: [
     { page: "mirror", label: "Espelho de Ponto" },
@@ -301,6 +307,13 @@ function Portal({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void 
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
+  // Documentos vencidos: contador no menu, atualizado a cada troca de tela.
+  const [docAlert, setDocAlert] = useState(0);
+  useEffect(() => {
+    if (!me) return;
+    rpc<{ vencido: number }>("portal_documents_summary").then((x) => setDocAlert(x?.vencido ?? 0)).catch(() => undefined);
+  }, [me, page]);
+
   const go = (p: Page, query = "") => {
     window.location.hash = p + (query ? `?${query}` : "");
     setPageState(p);
@@ -366,6 +379,7 @@ function Portal({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void 
                     <button key={m.page} disabled={m.soon}
                       className={current === m.page ? "nav-item active" : "nav-item"} onClick={() => go(m.page)}>
                       {m.label}{m.soon && <span className="soon">em breve</span>}
+                      {m.page === "documents" && docAlert > 0 && <span className="nav-badge" title="Documentos vencidos">{docAlert}</span>}
                     </button>
                   ))}
                 </div>
@@ -410,6 +424,8 @@ function Portal({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void 
           )}
           {current === "mirror" && <Mirror me={me} />}
           {current === "email" && <MailPage />}
+          {current === "documents" && <Documents key={window.location.hash} me={me} />}
+          {current === "doctypes" && <DocTypes />}
           {current === "afd" && <Fiscal key="afd" kind="afd" />}
           {current === "aej" && <Fiscal key="aej" kind="aej" />}
           {current === "bank" && <HourBank key={window.location.hash} />}
@@ -433,12 +449,14 @@ function Portal({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void 
   );
 }
 
-function Home({ go }: { go: (p: Page) => void }) {
+function Home({ go }: { go: (p: Page, query?: string) => void }) {
   const [summary, setSummary] = useState<Summary | null>(null);
+  const [docs, setDocs] = useState<{ vencido: number; alerta: number; valido: number } | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
     rpc<Summary>("portal_summary").then(setSummary).catch(() => setError("Não foi possível carregar o resumo."));
+    rpc<{ vencido: number; alerta: number; valido: number }>("portal_documents_summary").then(setDocs).catch(() => undefined);
   }, []);
 
   if (error) return <div className="banner error">{error}</div>;
@@ -457,6 +475,22 @@ function Home({ go }: { go: (p: Page) => void }) {
         />
         <Stat label="Tablets ativos" value={summary.terminals.length} note={`Obras: ${summary.sites}`} />
       </div>
+      {docs && (docs.vencido + docs.alerta + docs.valido) > 0 && (
+        <div className="stats">
+          <button className="stat stat-button" onClick={() => go("documents", "status=vencido")}>
+            <div className="muted small">Documentos vencidos</div>
+            <div className="stat-value doc-vencido">{docs.vencido}</div>
+          </button>
+          <button className="stat stat-button" onClick={() => go("documents", "status=alerta")}>
+            <div className="muted small">Documentos em alerta</div>
+            <div className="stat-value doc-alerta">{docs.alerta}</div>
+          </button>
+          <button className="stat stat-button" onClick={() => go("documents", "status=valido")}>
+            <div className="muted small">Documentos válidos</div>
+            <div className="stat-value doc-valido">{docs.valido}</div>
+          </button>
+        </div>
+      )}
 
       <section className="card">
         <div className="card-head">
