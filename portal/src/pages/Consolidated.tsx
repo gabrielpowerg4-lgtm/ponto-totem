@@ -137,7 +137,21 @@ export function Monthly() {
     return () => { alive = false; };
   }, [periods, closedRows, selected?.start, cpf, year, month]);
 
-  const all = useMemo(() => [...(closedRows ?? []), ...preview], [closedRows, preview]);
+  // Previas em sequencia (dois meses abertos) partem do saldo final da previa anterior.
+  const all = useMemo(() => {
+    const list = [...(closedRows ?? []), ...preview.map((r) => ({ ...r }))]
+      .sort((a, b) => a.cpf.localeCompare(b.cpf) || a.period_start.localeCompare(b.period_start));
+    for (let i = 1; i < list.length; i++) {
+      const r = list[i];
+      const prev = list[i - 1];
+      if (r.preview && prev.cpf === r.cpf) {
+        const delta = r.after - r.before;
+        r.before = prev.after;
+        r.after = r.before + delta;
+      }
+    }
+    return list;
+  }, [closedRows, preview]);
   const years = useMemo(() => Array.from(new Set([...(closedRows ?? []).map((r) => ym(r.period_end).y),
     ...(periods ?? []).map((p) => ym(p.end).y)])).sort((a, b) => b - a), [closedRows, periods]);
   const expired = useMemo(() => new Set((bank ?? []).filter((b) => b.expired_credits || b.expired_debits).map((b) => b.cpf)), [bank]);
@@ -235,7 +249,8 @@ export function Monthly() {
 
 function Kpis({ rows, current }: { rows: Row[]; current: number }) {
   const sum = (f: (r: Row) => number) => rows.reduce((x, r) => x + f(r), 0);
-  const comp = rows.some((r) => r.compensated === null) ? null : sum((r) => r.compensated ?? 0);
+  const closed = rows.filter((r) => r.compensated !== null);
+  const comp = closed.length === 0 ? null : closed.reduce((x, r) => x + (r.compensated ?? 0), 0);
   return (
     <div className="stats five">
       <div className="stat"><div className="muted small">Saldo</div><div className="stat-value small-value"><Hours value={current} signed /></div></div>
@@ -251,7 +266,7 @@ function Kpis({ rows, current }: { rows: Row[]; current: number }) {
       <div className="stat">
         <div className="muted small">Compensado</div>
         <div className="stat-value small-value">{comp === null ? "–" : fmtMin(comp)}</div>
-        <div className="muted small">crédito e débito que se anularam</div>
+        <div className="muted small">{rows.some((r) => r.preview) ? "nos meses fechados" : "crédito e débito que se anularam"}</div>
       </div>
       <div className="stat">
         <div className="muted small">Pago / descontado</div>
