@@ -8,7 +8,8 @@ import { Employees, Sites, Terminals } from "./pages/Registers";
 import { Account, CompanyPage, RulesPage, Users } from "./pages/Admin";
 import Schedules, { Holidays } from "./pages/Schedules";
 import { Audit } from "./pages/Reports";
-import { HourBank, Monthly, Opening, Settlements } from "./pages/Bank";
+import { HourBank, Opening, Settlements } from "./pages/Bank";
+import { Monthly } from "./pages/Consolidated";
 import Treatment from "./pages/Treatment";
 import Closing from "./pages/Closing";
 
