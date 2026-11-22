@@ -112,7 +112,15 @@ export default function Closing({ mode, me, openTreatment }: {
     };
   }, [sheets]);
 
-  const list = show === "pending" ? sheets.filter((s) => s.totals.pending_days > 0) : sheets;
+  const [query, setQuery] = useState("");
+  const [onlyOpen, setOnlyOpen] = useState(false);
+  const match = (s: Sheet) => {
+    const q = query.trim().toLowerCase();
+    if (!q) return true;
+    const digits = q.replace(/\D/g, "");
+    return s.name.toLowerCase().includes(q) || (digits !== "" && s.cpf.includes(digits));
+  };
+  const list = (show === "pending" ? sheets.filter((s) => s.totals.pending_days > 0) : sheets).filter(match);
   const finished = period ? period.end <= todayIso() : false;
   const latestClosed = periods?.find((p) => p.closed);
 
@@ -253,6 +261,16 @@ export default function Closing({ mode, me, openTreatment }: {
                     {period?.closed ? sheets.length : closures.length} de {sheets.length} fechado(s)
                   </span>
                 </div>
+                <div className="toolbar pad">
+                  <input className="search" placeholder="Buscar funcionário por nome ou CPF" value={query}
+                    onChange={(e) => setQuery(e.target.value)} />
+                  {!period?.closed && (
+                    <label className="check">
+                      <input type="checkbox" checked={onlyOpen} onChange={(e) => setOnlyOpen(e.target.checked)} />
+                      Só os abertos
+                    </label>
+                  )}
+                </div>
                 <div className="table-wrap">
                   <table>
                     <thead>
@@ -266,7 +284,7 @@ export default function Closing({ mode, me, openTreatment }: {
                       </tr>
                     </thead>
                     <tbody>
-                      {sheets.map((s) => {
+                      {sheets.filter((s) => match(s) && (!onlyOpen || !closedSet.has(s.cpf))).map((s) => {
                         const own = closedSet.get(s.cpf);
                         return (
                           <tr key={s.cpf}>
@@ -309,12 +327,14 @@ export default function Closing({ mode, me, openTreatment }: {
           )}
           {mode === "pending" && <Notices />}
           {mode !== "close" && <>
-          {mode === "pending" && <div className="toolbar">
-            <div className="segmented">
+          <div className="toolbar">
+            <input className="search" placeholder="Buscar funcionário por nome ou CPF" value={query}
+              onChange={(e) => setQuery(e.target.value)} />
+            {mode === "pending" && <div className="segmented">
               <button className={show === "pending" ? "on" : ""} onClick={() => setShow("pending")}>Com alerta</button>
               <button className={show === "all" ? "on" : ""} onClick={() => setShow("all")}>Todos</button>
-            </div>
-          </div>}
+            </div>}
+          </div>
 
           <section className="card flush">
             {list.length === 0 ? (
