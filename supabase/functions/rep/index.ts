@@ -2,7 +2,7 @@
 // Autenticacao propria: cada terminal tem um token, guardado no banco so como hash.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { buildAej, buildAfd, FiscalError } from "./fiscal.ts";
+import { buildAej, buildAejFull, buildAfd, FiscalError } from "./fiscal.ts";
 import { closingRow, computeAll, type TimesheetData } from "./jornada.ts";
 
 const db = createClient(
@@ -129,7 +129,7 @@ function failure(error: { message?: string } | null): Response {
 }
 
 // Usuario do portal identificado pelo token de sessao.
-async function portalCaller(req: Request): Promise<{ id: string; company: string; role: string } | null> {
+async function portalCaller(req: Request): Promise<{ id: string; company: string; role: string; email: string } | null> {
   const header = req.headers.get("Authorization") ?? "";
   const jwt = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
   if (!jwt) return null;
@@ -137,7 +137,7 @@ async function portalCaller(req: Request): Promise<{ id: string; company: string
   if (!data?.user) return null;
   const { data: pu } = await db.from("portal_users").select("company_id, role").eq("user_id", data.user.id)
     .maybeSingle();
-  return pu ? { id: data.user.id, company: pu.company_id, role: pu.role } : null;
+  return pu ? { id: data.user.id, company: pu.company_id, role: pu.role, email: data.user.email ?? "" } : null;
 }
 
 Deno.serve(async (req: Request) => {
@@ -327,6 +327,61 @@ Deno.serve(async (req: Request) => {
       });
       if (closeError) return failure(closeError);
       return json(200, { ok: true, days: days.length, pending_days: sheets[0].totals.pending_days });
+    }
+
+    // Portal: arquivos fiscais (somente administrador). AFD de qualquer intervalo; AEJ so de periodo fechado.
+    if (req.method === "POST" && path.endsWith("/v1/portal/fiscal")) {
+      const caller = await portalCaller(req);
+      if (!caller) return json(401, { error: "invalid_token" });
+      if (caller.role !== "admin") return json(403, { error: "forbidden" });
+      const body = await req.json();
+      const kind = String(body.kind ?? "");
+      const from = String(body.from ?? "");
+      const to = String(body.to ?? "");
+      if (!["afd", "aej"].includes(kind) || !/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) ||
+          to < from) {
+        return json(400, { error: "invalid_period" });
+      }
+      const { data: fiscal, error: fiscalError } = await db.rpc("rep_fiscal_company", {
+        p_company: caller.company, p_from: from, p_to: to,
+      });
+      if (fiscalError) return failure(fiscalError);
+      let file;
+      let extra: Record<string, unknown> = {};
+      try {
+        if (kind === "afd") {
+          file = await buildAfd(fiscal.head, fiscal.afd, from, to);
+        } else {
+          const { data, error } = await db.rpc("rep_timesheet_data", {
+            p_company: caller.company, p_from: from, p_to: to, p_cpf: "",
+          });
+          if (error) return failure(error);
+          const ts = data as TimesheetData;
+          const company = ts.closed.some((c) => !c.cpf && c.start <= from && c.end >= to);
+          const single = new Set(ts.closed.filter((c) => c.cpf && c.start === from && c.end === to).map((c) => c.cpf));
+          const all = computeAll(ts).filter((sh) => sh.days.some((d) => !d.outside_contract));
+          const sheets = all.filter((sh) => company || single.has(sh.cpf));
+          if (sheets.length === 0) return json(400, { error: "period_open" });
+          file = buildAejFull(fiscal.head, sheets, from, to, ts.settings.hour_bank !== false);
+          extra = { employees: sheets.length, employees_open: all.length - sheets.length };
+          if (all.length > sheets.length) {
+            file.warnings.unshift(`${all.length - sheets.length} funcionário(s) com o período ainda aberto ficaram fora do arquivo.`);
+          }
+        }
+      } catch (e) {
+        if (e instanceof FiscalError) return json(400, { error: e.message });
+        throw e;
+      }
+      await db.from("audit_log").insert({
+        actor: "portal:" + (caller.email || caller.id),
+        action: kind === "afd" ? "afd_gerado" : "aej_gerado",
+        detail: { company_id: caller.company, from, to, records: file.records },
+      });
+      let binary = "";
+      for (const b of file.bytes) binary += String.fromCharCode(b);
+      return json(200, {
+        filename: file.filename, content_base64: btoa(binary), records: file.records, warnings: file.warnings, ...extra,
+      });
     }
 
     const tokenHash = await bearerHash(req);

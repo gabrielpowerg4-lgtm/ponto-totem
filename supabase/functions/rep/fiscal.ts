@@ -327,3 +327,160 @@ export function buildAej(
     warnings,
   };
 }
+
+// ---------------------------------------------------------------------------
+// AEJ completo (leiaute 002), a partir das fichas tratadas e fechadas
+// ---------------------------------------------------------------------------
+
+/** Ficha minima de que o AEJ precisa (vem do calculo da jornada). */
+export type AejSheet = {
+  cpf: string;
+  name: string;
+  days: {
+    date: string;
+    weekday: number;
+    schedule_code: string;
+    schedule_times: string[];
+    expected_base: number;
+    bank_delta: number;
+    flags: string[];
+    outside_contract: boolean;
+    occurrences: { type: string }[];
+    marks: {
+      date: string;
+      min: number;
+      kind: "O" | "I";
+      effective: boolean;
+      at_min: number;
+      reason: string | null;
+      disregard: { reason: string } | null;
+    }[];
+  }[];
+};
+
+/** Deslocamento do fuso (ex.: "-0300") numa data, pelo nome IANA. */
+export function tzOffset(timezone: string, date: string): string {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone: timezone, timeZoneName: "longOffset" })
+      .formatToParts(new Date(date + "T12:00:00Z"));
+    const name = parts.find((p) => p.type === "timeZoneName")?.value ?? "GMT-03:00";
+    const m = name.match(/GMT([+-])(\d{2}):?(\d{2})/);
+    return m ? `${m[1]}${m[2]}${m[3]}` : "+0000";
+  } catch {
+    return "-0300";
+  }
+}
+
+export function buildAejFull(
+  head: Head & { timezone?: string },
+  sheets: AejSheet[],
+  from: string,
+  to: string,
+  hourBank: boolean,
+): FiscalFile {
+  requireEmployer(head);
+  const tz = head.timezone || "America/Sao_Paulo";
+  const warnings = commonWarnings(head);
+  const count: Record<string, number> = {};
+  const body: Record<string, string[]> = { "01": [], "02": [], "03": [], "04": [], "05": [], "07": [], "08": [] };
+  const push = (type: string, fields: unknown[]) => {
+    body[type].push([type, ...fields.map((f) => clean(f))].join("|"));
+    count[type] = (count[type] ?? 0) + 1;
+  };
+  const dh = (date: string, min: number) => {
+    const d = new Date(Date.UTC(Number(date.slice(0, 4)), Number(date.slice(5, 7)) - 1, Number(date.slice(8, 10))));
+    d.setUTCMinutes(min);
+    const day = d.toISOString().slice(0, 10);
+    const hh = String(d.getUTCHours()).padStart(2, "0");
+    const mm = String(d.getUTCMinutes()).padStart(2, "0");
+    return `${day}T${hh}:${mm}:00${tzOffset(tz, day)}`;
+  };
+
+  const inpi = digits(head.inpi_number).padStart(17, "0").slice(-17);
+  push("01", [head.id_type, digits(head.employer_id), digits(head.caepf), digits(head.cno), head.legal_name,
+    from, to, head.generated_dh, "002"]);
+  push("02", [1, 3, inpi]);
+
+  // Horarios contratuais: um registro por combinacao de horarios usada (o horario muda por dia da semana).
+  const schedules = new Map<string, string>();
+  const scheduleOf = (code: string, times: string[]) => {
+    const valid = times.filter((t) => /^\d{4}$/.test(t));
+    const key = valid.length >= 2 ? valid.join("") : "FOLGA";
+    let id = schedules.get(key);
+    if (!id) {
+      const base = valid.length >= 2 ? (code || "JORNADA") : "SEMJORNADA";
+      id = `${base}-${schedules.size + 1}`.slice(0, 30);
+      schedules.set(key, id);
+      if (valid.length >= 2) {
+        let duration = 0;
+        for (let i = 0; i + 1 < valid.length; i += 2) {
+          duration += (minutes(valid[i + 1]) - minutes(valid[i]) + 1440) % 1440;
+        }
+        push("04", [id, duration, ...valid]);
+      } else {
+        push("04", [id, 0, "0000", "0000"]);
+      }
+    }
+    return id;
+  };
+
+  let odd = 0;
+  let restWorked = 0;
+  sheets.forEach((s, i) => {
+    const link = i + 1;
+    push("03", [link, s.cpf, s.name]);
+    for (const d of s.days) {
+      if (d.outside_contract) continue;
+      // Marcacoes do dia em ordem: efetivas alternam entrada/saida; desconsideradas entram como D.
+      const marks = [...d.marks].filter((m) => m.effective || m.disregard).sort((a, b) => a.at_min - b.at_min);
+      let position = 0;
+      for (const m of marks) {
+        const pair = Math.floor(position / 2) + 1;
+        const seq = String(pair).padStart(3, "0");
+        const source = m.kind === "I" ? "I" : "O";
+        if (!m.effective) {
+          push("05", [link, dh(m.date, m.min), source === "O" ? 1 : "", "D", seq, source, "", m.disregard?.reason ?? "Desconsiderada"]);
+          continue;
+        }
+        const entry = position % 2 === 0;
+        if (entry && pair === 1 && d.expected_base === 0) restWorked += 1;
+        push("05", [link, dh(m.date, m.min), source === "O" ? 1 : "", entry ? "E" : "S", seq, source,
+          entry && pair === 1 ? scheduleOf(d.schedule_code, d.schedule_times) : "", source === "I" ? (m.reason || "Incluída no tratamento") : ""]);
+        position += 1;
+      }
+      if (position % 2 === 1) odd += 1;
+
+      // Ausencias e banco de horas.
+      const types = new Set(d.occurrences.map((o) => o.type));
+      if (types.has("dsr") || (d.weekday === 0 && d.expected_base === 0 && position === 0)) push("07", [link, 1, d.date, "", ""]);
+      if (types.has("falta") || d.flags.includes("falta")) push("07", [link, 2, d.date, "", ""]);
+      if (types.has("troca_feriado")) push("07", [link, 4, d.date, "", ""]);
+      if (hourBank && d.bank_delta !== 0) {
+        push("07", [link, 3, d.date, Math.abs(Math.round(d.bank_delta)), d.bank_delta > 0 ? 1 : 2]);
+      }
+    }
+  });
+
+  push("08", [
+    head.program_name || "Ponto Totem", head.program_version || "1", head.dev_id_type || 1,
+    digits(head.dev_id) || "0", head.dev_name || "Não cadastrado", head.dev_email || "",
+  ]);
+
+  const lines = ["01", "02", "03", "04", "05", "07", "08"].flatMap((t) => body[t]);
+  const totals = ["01", "02", "03", "04", "05", "06", "07", "08"].map((t) => count[t] ?? 0);
+  lines.push(["99", ...totals].join("|"));
+  lines.push(SIGNATURE.padEnd(100, " "));
+
+  if (sheets.length === 0) warnings.unshift("Nenhum funcionário com o período fechado.");
+  if (odd > 0) warnings.unshift(`${odd} dia(s) ficaram com número ímpar de marcações depois do tratamento.`);
+  if (restWorked > 0) {
+    warnings.push(`${restWorked} dia(s) trabalhados sem jornada (descanso ou feriado) usam o horário "SEMJORNADA".`);
+  }
+
+  return {
+    filename: `AEJ_${digits(head.employer_id)}_${from}_${to}.txt`,
+    bytes: toLatin1(lines.join(CRLF) + CRLF),
+    records: count["05"] ?? 0,
+    warnings,
+  };
+}

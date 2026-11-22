@@ -12,6 +12,8 @@ import { HourBank, Opening, Settlements } from "./pages/Bank";
 import { Monthly } from "./pages/Consolidated";
 import Treatment from "./pages/Treatment";
 import Closing from "./pages/Closing";
+import Mirror from "./pages/Mirror";
+import Fiscal from "./pages/Fiscal";
 
 type Theme = "light" | "dark";
 
@@ -225,9 +227,9 @@ const GROUPS: Group[] = [
     { page: "opening", label: "Saldo de abertura", admin: true },
   ] },
   { id: "relatorios", label: "Relatórios e arquivos", items: [
-    { page: "mirror", label: "Espelho de Ponto", soon: true },
-    { page: "afd", label: "AFD", soon: true },
-    { page: "aej", label: "AEJ", soon: true },
+    { page: "mirror", label: "Espelho de Ponto" },
+    { page: "afd", label: "AFD", admin: true },
+    { page: "aej", label: "AEJ", admin: true },
     { page: "audit", label: "Auditoria", admin: true },
   ] },
   { id: "cadastros", label: "Cadastros", items: [
@@ -404,6 +406,9 @@ function Portal({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void 
           {current === "closing" && (
             <Closing mode="close" me={me} openTreatment={(cpf, start) => go("treatment", `cpf=${cpf}&start=${start}`)} />
           )}
+          {current === "mirror" && <Mirror me={me} />}
+          {current === "afd" && <Fiscal key="afd" kind="afd" />}
+          {current === "aej" && <Fiscal key="aej" kind="aej" />}
           {current === "bank" && <HourBank key={window.location.hash} />}
           {current === "settlements" && <Settlements me={me} goAccount={() => go("account")} />}
           {current === "monthly" && <Monthly />}

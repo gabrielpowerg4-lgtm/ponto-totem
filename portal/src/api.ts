@@ -164,6 +164,9 @@ const ERRORS: Record<string, string> = {
   invalid_cno: "CNO inválido: informe os 12 números.",
   invalid_responsible_cpf: "CPF do responsável inválido: informe os 11 números.",
   invalid_period: "Período inválido (máximo de 400 dias).",
+  period_open: "Nenhum funcionário com este período fechado. O AEJ só é gerado depois do fechamento.",
+  forbidden: "Somente o administrador pode gerar este arquivo.",
+  employer_missing: "Cadastre o CNPJ e a razão social da empresa em Configurações antes de gerar o arquivo.",
   missing_fields: "Preencha os campos obrigatórios.",
   duplicate_name: "Já existe uma obra com este nome.",
   not_found: "Registro não encontrado. Atualize a página.",
@@ -279,6 +282,24 @@ export async function closeEmployee(start: string, end: string, cpf: string) {
   }
 }
 
+export type FiscalResult = {
+  filename: string;
+  content_base64: string;
+  records: number;
+  warnings: string[];
+  employees?: number;
+  employees_open?: number;
+};
+
+/** AFD (qualquer intervalo) ou AEJ (periodo fechado), gerados no servidor. Somente administrador. */
+export async function fiscalFile(kind: "afd" | "aej", from: string, to: string): Promise<FiscalResult> {
+  try {
+    return (await post("/v1/portal/fiscal", { kind, from, to }, true)) as unknown as FiscalResult;
+  } catch (e) {
+    throw new Error(errorText(e, "Não foi possível gerar o arquivo."));
+  }
+}
+
 export type Period = {
   start: string;
   end: string;
@@ -348,8 +369,8 @@ export const FACE_LABEL: Record<string, string> = {
 export const faceOk = (status: string) => status === "ROSTO_CONFERE" || status === "VIVACIDADE_OK";
 
 /** Baixa um texto como arquivo. */
-export function download(filename: string, content: string, type = "text/csv;charset=utf-8") {
-  const blob = new Blob([content], { type });
+export function download(filename: string, content: string | Blob, type = "text/csv;charset=utf-8") {
+  const blob = content instanceof Blob ? content : new Blob([content], { type });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
