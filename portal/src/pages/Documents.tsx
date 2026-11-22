@@ -208,7 +208,7 @@ export function Documents({ me }: { me: Me }) {
       ) : (
         <section className="card flush">
           <div className="table-wrap">
-            <table>
+            <table className="doc-table">
               <thead>
                 <tr>
                   <th>Funcionário</th>
@@ -480,8 +480,8 @@ export function DocTypes() {
                   <tr key={t.id}>
                     <td className="strong">{t.code}</td>
                     <td>{t.name}</td>
-                    <td className="num">{t.validity_days ? `${t.validity_days} dias` : "sem vencimento"}</td>
-                    <td className="num">{t.alert_days} dias</td>
+                    <td className="num nowrap">{t.validity_days ? `${t.validity_days} dias` : "sem vencimento"}</td>
+                    <td className="num nowrap">{t.alert_days} dias</td>
                     <td className="num">{t.documents}</td>
                     <td>{t.active ? <Badge tone="ok">Habilitado</Badge> : <Badge tone="neutral">Desabilitado</Badge>}</td>
                     <td className="right"><button className="ghost small" onClick={() => setEditing(t)}>Editar</button></td>
