@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  br, download, errorText, formatCpf, rpc, supabase, todayIso, type Employee, type Me, type Site,
+  br, docAlertPreview as callPreview, download, errorText, formatCpf, rpc, supabase, todayIso, type Employee, type Me, type Site,
 } from "../api";
 import { askConfirm, askText, Badge, Banner, Empty, Loading, PageHead, useLoad } from "../ui";
 import { Avatar, CONTRACT_LABEL, photoUrl } from "./EmployeeForm";
@@ -16,7 +16,16 @@ export type DocType = {
   alert_days: number;
   active: boolean;
   documents: number;
+  notify_enabled: boolean;
+  notify_emails: string[];
+  notify_frequency: "diario" | "semanal";
+  notify_weekday: number;
+  notify_employee: boolean;
 };
+
+const WEEKDAYS = ["domingo", "segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado"];
+
+type Notice = { run_date: string; kind: "rh" | "funcionario" | "teste"; recipient: string; documents: number; ok: boolean; error: string | null; created_at: string };
 
 export type Doc = {
   id: string;
@@ -427,36 +436,81 @@ export function DocumentForm({ me, mode, doc, types, employees, sites, cpf, onCl
 
 export function DocTypes() {
   const { data, error, reload } = useLoad(() => rpc<DocType[]>("portal_doc_types"));
-  const [editing, setEditing] = useState<Partial<DocType> | null>(null);
+  const { data: notices, reload: reloadNotices } = useLoad(() => rpc<Notice[]>("portal_doc_notifications"));
+  const [editing, setEditing] = useState<(Partial<DocType> & { emailsText?: string }) | null>(null);
   const [msg, setMsg] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
+  const [preview, setPreview] = useState<{ subject?: string; html?: string; documents: number } | null>(null);
+  const [busy, setBusy] = useState("");
+
+  const open = (t: Partial<DocType>) => {
+    setPreview(null);
+    setMsg(null);
+    setEditing({ ...t, emailsText: (t.notify_emails ?? []).join(", ") });
+  };
+  const emailsOf = (text: string) => text.split(/[,;\s]+/).map((x) => x.trim()).filter(Boolean);
+  const payload = () => ({
+    id: editing?.id ?? "", code: editing?.code ?? "", name: editing?.name ?? "",
+    validity_days: editing?.validity_days ?? "", alert_days: editing?.alert_days ?? 30, active: editing?.active ?? true,
+    notify_enabled: editing?.notify_enabled ?? false, notify_emails: emailsOf(editing?.emailsText ?? ""),
+    notify_frequency: editing?.notify_frequency ?? "semanal", notify_weekday: editing?.notify_weekday ?? 1,
+    notify_employee: editing?.notify_employee ?? false,
+  });
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editing) return;
+    setBusy("save");
     try {
-      await rpc("portal_doc_type_save", {
-        p: {
-          id: editing.id ?? "", code: editing.code ?? "", name: editing.name ?? "",
-          validity_days: editing.validity_days ?? "", alert_days: editing.alert_days ?? 30, active: editing.active ?? true,
-        },
-      });
+      await rpc("portal_doc_type_save", { p: payload() });
       setEditing(null);
       setMsg({ tone: "ok", text: "Tipo salvo." });
       reload();
     } catch (err) {
       setMsg({ tone: "error", text: errorText(err, "Não foi possível salvar.") });
     }
+    setBusy("");
+  };
+
+  const copyEmails = async () => {
+    if (!editing?.id) return;
+    if (!(await askConfirm(`Salvar este tipo e copiar os destinatários (${emailsOf(editing.emailsText ?? "").length}) para todos os outros tipos? A ativação e a frequência de cada tipo não mudam.`, { title: "Copiar destinatários", confirmLabel: "Copiar" }))) return;
+    setBusy("copy");
+    try {
+      await rpc("portal_doc_type_save", { p: payload() });
+      const n = await rpc<number>("portal_doc_type_copy_emails", { p: { id: editing.id } });
+      setMsg({ tone: "ok", text: `Destinatários copiados para ${n} tipo(s).` });
+      reload();
+    } catch (err) {
+      setMsg({ tone: "error", text: errorText(err, "Não foi possível copiar.") });
+    }
+    setBusy("");
+  };
+
+  const runPreview = async (send: boolean) => {
+    if (!editing?.id) return;
+    setBusy(send ? "send" : "preview");
+    setMsg(null);
+    try {
+      const r = await callPreview(editing.id, send);
+      if (send) {
+        setMsg({ tone: "ok", text: r.documents ? `Aviso de teste enviado para o seu e-mail (${r.documents} documento(s)).` : "Nenhum documento deste tipo em alerta ou vencido: nada a enviar." });
+        reloadNotices();
+      } else setPreview(r);
+    } catch (err) {
+      setMsg({ tone: "error", text: errorText(err, "Não foi possível gerar o aviso.") });
+    }
+    setBusy("");
   };
 
   return (
     <>
       <PageHead
         title="Tipos de documento"
-        lead="Validade e dias de alerta de cada tipo. O vencimento do documento é sugerido pela validade e pode ser ajustado no cadastro."
-        actions={<button className="primary" onClick={() => setEditing({ active: true, alert_days: 30, validity_days: 365 })}>Novo tipo</button>}
+        lead="Validade, dias de alerta e aviso por e-mail de cada tipo. O vencimento do documento é sugerido pela validade e pode ser ajustado no cadastro."
+        actions={<button className="primary" onClick={() => open({ active: true, alert_days: 30, validity_days: 365, notify_frequency: "semanal", notify_weekday: 1 })}>Novo tipo</button>}
       />
       {error && <Banner tone="error">{error}</Banner>}
-      {msg && <Banner tone={msg.tone}>{msg.text}</Banner>}
+      {msg && !editing && <Banner tone={msg.tone}>{msg.text}</Banner>}
       {!data ? <Loading /> : (
         <section className="card flush">
           <div className="table-wrap">
@@ -468,6 +522,7 @@ export function DocTypes() {
                   <th className="num">Validade</th>
                   <th className="num">Alerta</th>
                   <th className="num">Documentos</th>
+                  <th>Aviso por e-mail</th>
                   <th>Situação</th>
                   <th />
                 </tr>
@@ -480,8 +535,16 @@ export function DocTypes() {
                     <td className="num nowrap">{t.validity_days ? `${t.validity_days} dias` : "sem vencimento"}</td>
                     <td className="num nowrap">{t.alert_days} dias</td>
                     <td className="num">{t.documents}</td>
+                    <td className="small">
+                      {t.notify_enabled ? (
+                        <>
+                          <Badge tone="ok">{t.notify_frequency === "diario" ? "Diário" : `Semanal · ${WEEKDAYS[t.notify_weekday].split("-")[0]}`}</Badge>
+                          <div className="muted">{t.notify_emails.length} destinatário(s){t.notify_employee ? " + funcionário" : ""}</div>
+                        </>
+                      ) : <span className="muted">desativado</span>}
+                    </td>
                     <td>{t.active ? <Badge tone="ok">Habilitado</Badge> : <Badge tone="neutral">Desabilitado</Badge>}</td>
-                    <td className="right"><button className="ghost small" onClick={() => setEditing(t)}>Editar</button></td>
+                    <td className="right"><button className="ghost small" onClick={() => open(t)}>Editar</button></td>
                   </tr>
                 ))}
               </tbody>
@@ -489,6 +552,29 @@ export function DocTypes() {
           </div>
         </section>
       )}
+
+      <section className="card">
+        <div className="card-head"><h2>Histórico de avisos</h2><span className="muted small">Envio automático todo dia às 07:00</span></div>
+        {!notices ? <Loading /> : notices.length === 0 ? <p className="muted small">Nenhum aviso enviado ainda.</p> : (
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>Quando</th><th>Para</th><th>Tipo</th><th className="num">Documentos</th><th>Resultado</th></tr></thead>
+              <tbody>
+                {notices.map((n, i) => (
+                  <tr key={i}>
+                    <td className="nowrap">{new Date(n.created_at).toLocaleString("pt-BR")}</td>
+                    <td>{n.recipient}</td>
+                    <td>{n.kind === "rh" ? "RH" : n.kind === "funcionario" ? "Funcionário" : "Teste"}</td>
+                    <td className="num">{n.documents}</td>
+                    <td>{n.ok ? <Badge tone="ok">Enviado</Badge> : <Badge tone="error">{errorText(new Error(n.error ?? "smtp_failed"), "Falhou")}</Badge>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
       {editing && (
         <div className="drawer-scrim" onClick={() => setEditing(null)}>
           <form className="drawer" onClick={(e) => e.stopPropagation()} onSubmit={save}>
@@ -497,6 +583,7 @@ export function DocTypes() {
               <button type="button" className="ghost small" onClick={() => setEditing(null)}>Fechar</button>
             </div>
             <div className="drawer-body">
+              {msg && <Banner tone={msg.tone}>{msg.text}</Banner>}
               <label>
                 Referência (código curto)
                 <input value={editing.code ?? ""} maxLength={20} required onChange={(e) => setEditing({ ...editing, code: e.target.value })} />
@@ -522,10 +609,68 @@ export function DocTypes() {
                 Habilitado (aparece no cadastro de documentos)
               </label>
               {editing.id && <p className="muted small">Mudar a validade não altera documentos já cadastrados; vale para os próximos.</p>}
+
+              <h3>Aviso por e-mail</h3>
+              <label className="check">
+                <input type="checkbox" checked={editing.notify_enabled ?? false} onChange={(e) => setEditing({ ...editing, notify_enabled: e.target.checked })} />
+                Enviar aviso de vencimento deste tipo
+              </label>
+              <label>
+                Destinatários (separados por vírgula)
+                <textarea rows={2} value={editing.emailsText ?? ""} placeholder="rh@empresa.com.br, seguranca@empresa.com.br"
+                  onChange={(e) => setEditing({ ...editing, emailsText: e.target.value })} />
+              </label>
+              <div className="grid-2">
+                <label>
+                  Frequência
+                  <select value={editing.notify_frequency ?? "semanal"}
+                    onChange={(e) => setEditing({ ...editing, notify_frequency: e.target.value as "diario" | "semanal" })}>
+                    <option value="diario">Diário (só novidades)</option>
+                    <option value="semanal">Semanal (resumo)</option>
+                  </select>
+                </label>
+                {editing.notify_frequency !== "diario" && (
+                  <label>
+                    Dia da semana
+                    <select value={editing.notify_weekday ?? 1} onChange={(e) => setEditing({ ...editing, notify_weekday: Number(e.target.value) })}>
+                      {WEEKDAYS.map((d, i) => <option key={d} value={i}>{d}</option>)}
+                    </select>
+                  </label>
+                )}
+              </div>
+              <label className="check">
+                <input type="checkbox" checked={editing.notify_employee ?? false} onChange={(e) => setEditing({ ...editing, notify_employee: e.target.checked })} />
+                Enviar também para o funcionário (só os documentos dele, se tiver e-mail no cadastro)
+              </label>
+              <p className="muted small">
+                {editing.notify_frequency === "diario"
+                  ? "Diário: cada documento é avisado uma vez quando entra em alerta e uma vez quando vence."
+                  : "Semanal: no dia escolhido, resumo de tudo que está em alerta ou vencido deste tipo."}
+                {" "}Envio às 07:00. Quem recebe vários tipos ganha um único e-mail com tudo.
+              </p>
+              {editing.id && (
+                <div className="toolbar">
+                  <button type="button" className="ghost small" disabled={!!busy} onClick={() => runPreview(false)}>Ver prévia</button>
+                  <button type="button" className="ghost small" disabled={!!busy} onClick={() => runPreview(true)}>
+                    {busy === "send" ? "Enviando" : "Enviar teste para mim"}
+                  </button>
+                  <button type="button" className="ghost small" disabled={!!busy} onClick={copyEmails}>Copiar destinatários para todos os tipos</button>
+                </div>
+              )}
+              {preview && (
+                preview.documents === 0
+                  ? <p className="muted small">Nenhum documento deste tipo em alerta ou vencido agora.</p>
+                  : (
+                    <div className="mail-preview">
+                      <div className="small"><b>Assunto:</b> {preview.subject}</div>
+                      <iframe title="Prévia do aviso" sandbox="" srcDoc={preview.html} />
+                    </div>
+                  )
+              )}
             </div>
             <div className="drawer-foot">
               <button type="button" className="ghost" onClick={() => setEditing(null)}>Cancelar</button>
-              <button className="primary">Salvar</button>
+              <button className="primary" disabled={!!busy}>Salvar</button>
             </div>
           </form>
         </div>

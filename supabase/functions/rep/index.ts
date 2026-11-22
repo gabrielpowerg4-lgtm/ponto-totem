@@ -5,6 +5,9 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { buildAej, buildAejFull, buildAfd, FiscalError } from "./fiscal.ts";
 import { closingRow, computeAll, type TimesheetData } from "./jornada.ts";
 import { isEmail, MailError, mailConfig, maskEmail, sendMail } from "./mailer.ts";
+import { type AlertItem, buildAlertMessages } from "./docAlerts.ts";
+
+const PORTAL_URL = Deno.env.get("PORTAL_URL") ?? "https://semax-sgi-ponto.eng.br";
 
 const db = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -375,6 +378,83 @@ Deno.serve(async (req: Request) => {
         return result.ok ? json(200, { ok: true, port: c.port }) : json(502, { error: result.code, port: c.port });
       }
       return json(405, { error: "not_found" });
+    }
+
+    // Agendador (pg_cron, 07:00): avisos de vencimento de documentos. Autenticado pela chave do Vault.
+    if (req.method === "POST" && path.endsWith("/v1/cron/doc-alerts")) {
+      const key = req.headers.get("x-cron-key") ?? "";
+      const { data: okKey } = await db.rpc("rep_cron_key_ok", { p_key: key });
+      if (okKey !== true) return json(401, { error: "invalid_token" });
+      const { data: companies } = await db.rpc("rep_doc_alert_companies");
+      const summary: unknown[] = [];
+      for (const company of (companies ?? []) as string[]) {
+        const { data: alerts, error } = await db.rpc("rep_doc_alerts", { p_company: company });
+        if (error) {
+          console.error(JSON.stringify({ event: "doc_alerts_failed", step: "data" }));
+          continue;
+        }
+        const today = String(alerts.today);
+        const { data: first } = await db.rpc("rep_doc_alerts_begin", { p_company: company, p_date: today });
+        if (first !== true) {
+          summary.push({ company, skipped: "already_ran" });
+          continue;
+        }
+        const items = (alerts.items ?? []) as AlertItem[];
+        const load = async () => (await db.rpc("rep_mail_config", { p_company: company })).data;
+        const sends: Record<string, unknown>[] = [];
+        const sent = new Map<string, { id: string; event: string }>();
+        for (const m of buildAlertMessages(items, PORTAL_URL)) {
+          let ok = false;
+          let code = "";
+          try {
+            await sendMail(load, { to: m.to, subject: m.subject, text: m.text, html: m.html });
+            ok = true;
+          } catch (e) {
+            code = e instanceof MailError ? e.code : "smtp_failed";
+          }
+          sends.push({ kind: m.kind, recipient: maskEmail(m.to), documents: m.items.length, ok, error: code });
+          if (ok) {
+            for (const i of m.items) if (i.frequency === "diario") sent.set(`${i.id}|${i.event}`, { id: i.id, event: i.event });
+          }
+        }
+        await db.rpc("rep_doc_alerts_done", {
+          p_company: company, p: { run_date: today, sends, sent: [...sent.values()] },
+        });
+        summary.push({ company, items: items.length, emails: sends.length, failed: sends.filter((x) => !x.ok).length });
+      }
+      console.log(JSON.stringify({ event: "doc_alerts_run", summary }));
+      return json(200, { ok: true, summary });
+    }
+
+    // Portal: previa do aviso de um tipo de documento, ou envio de teste para quem esta logado.
+    if (req.method === "POST" && path.endsWith("/v1/portal/doc-alerts/preview")) {
+      const caller = await portalCaller(req);
+      if (!caller) return json(401, { error: "invalid_token" });
+      if (caller.role !== "admin") return json(403, { error: "forbidden" });
+      const body = await req.json();
+      const typeId = String(body.type_id ?? "");
+      const send = body.send === true;
+      const { data: alerts, error } = await db.rpc("rep_doc_alerts", { p_company: caller.company, p_type: typeId });
+      if (error) return failure(error);
+      const items = ((alerts.items ?? []) as AlertItem[]).map((i) => ({ ...i, emails: [caller.email] }));
+      const [m] = buildAlertMessages(items, PORTAL_URL, true);
+      if (!m) return json(200, { documents: 0 });
+      if (!send) return json(200, { documents: m.items.length, subject: m.subject, html: m.html });
+      if (!isEmail(caller.email)) return json(400, { error: "invalid_email" });
+      const load = async () => (await db.rpc("rep_mail_config", { p_company: caller.company })).data;
+      let ok = false;
+      let code = "";
+      try {
+        await sendMail(load, { to: caller.email, subject: `[Teste] ${m.subject}`, text: m.text, html: m.html });
+        ok = true;
+      } catch (e) {
+        code = e instanceof MailError ? e.code : "smtp_failed";
+      }
+      await db.rpc("rep_doc_alerts_done", {
+        p_company: caller.company,
+        p: { run_date: String(alerts.today), sends: [{ kind: "teste", recipient: maskEmail(caller.email), documents: m.items.length, ok, error: code }], sent: [] },
+      });
+      return ok ? json(200, { ok: true, documents: m.items.length }) : json(502, { error: code });
     }
 
     // Portal: arquivos fiscais (somente administrador). AFD de qualquer intervalo; AEJ so de periodo fechado.

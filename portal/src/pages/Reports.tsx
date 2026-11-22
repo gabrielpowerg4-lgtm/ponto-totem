@@ -92,6 +92,7 @@ const ACTION_LABEL: Record<string, string> = {
   documento_renovado: "Documento renovado",
   documento_excluido: "Documento excluído",
   tipo_documento_salvo: "Tipo de documento salvo",
+  destinatarios_copiados: "Destinatários de aviso copiados",
   email_teste: "E-mail de teste enviado",
   afd_gerado: "AFD gerado",
   aej_gerado: "AEJ gerado",

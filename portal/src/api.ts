@@ -164,6 +164,8 @@ const ERRORS: Record<string, string> = {
   invalid_cno: "CNO inválido: informe os 12 números.",
   invalid_responsible_cpf: "CPF do responsável inválido: informe os 11 números.",
   invalid_period: "Período inválido (máximo de 400 dias).",
+  notify_without_recipient: "Para ativar o aviso, informe ao menos um destinatário ou marque o envio ao funcionário.",
+  too_many: "Muitos itens de uma vez. Reduza a lista.",
   invalid_smtp: "Servidor, porta ou nome do remetente inválido.",
   smtp_not_configured: "Envio de e-mail não configurado: preencha os dados e a senha nesta tela.",
   smtp_auth: "O servidor de e-mail recusou o usuário ou a senha (SMTP_USER / SMTP_PASSWORD).",
@@ -327,6 +329,13 @@ async function authed(method: "GET" | "POST", path: string, body?: unknown): Pro
   const out = await res.json().catch(() => ({}));
   if (res.ok) return out;
   throw new Error(String(out.error ?? "failed"));
+}
+
+/** Previa do aviso de vencimento de um tipo, ou envio de teste para o proprio usuario. */
+export async function docAlertPreview(typeId: string, send: boolean): Promise<{ documents: number; subject?: string; html?: string }> {
+  return (await authed("POST", "/v1/portal/doc-alerts/preview", { type_id: typeId, send })) as unknown as {
+    documents: number; subject?: string; html?: string;
+  };
 }
 
 /** Situacao do envio de e-mail (a senha nunca vem do servidor). Somente administrador. */
