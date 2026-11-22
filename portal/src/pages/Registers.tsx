@@ -1,16 +1,23 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   br, errorText, formatCpf, formatDateTime, rpc, todayIso, type Employee, type Me, type ScheduleRow, type Site,
   type Terminal,
 } from "../api";
 import { Badge, Banner, Empty, Loading, PageHead, useLoad } from "../ui";
+import EmployeeForm, { Avatar, CONTRACT_LABEL, photoUrl } from "./EmployeeForm";
 
 // ---------------------------------------------------------------------------
-// Funcionarios (cadastro principal no Bubble: aqui so consulta)
+// Funcionarios: cadastro, perfis e jornada
 // ---------------------------------------------------------------------------
 
-export function Employees() {
+export function Employees({ me }: { me: Me }) {
   const { data, error, reload } = useLoad(() => rpc<Employee[]>("portal_employees"));
+  const { data: siteList } = useLoad(() => rpc<Site[]>("portal_sites"));
+  const [form, setForm] = useState<{ employee: Employee | null } | null>(null);
+  const [photos, setPhotos] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (data) photoUrl(data.map((e) => e.photo_path ?? "")).then(setPhotos).catch(() => undefined);
+  }, [data]);
   const { data: schedules } = useLoad(() => rpc<ScheduleRow[]>("portal_schedules"));
   const [editing, setEditing] = useState<{ cpf: string; schedule: string; from: string } | null>(null);
   const [saveError, setSaveError] = useState("");
@@ -84,7 +91,8 @@ export function Employees() {
     <>
       <PageHead
         title="Funcionários"
-        lead="O cadastro é feito no Bubble e chega aqui pela integração. Aqui você define a jornada de cada um (o Bubble também pode enviá-la)."
+        lead="Cadastro dos funcionários, perfis de acesso e jornada. Inclusão, troca de nome e desligamento ficam registrados no AFD com o seu CPF."
+        actions={<button className="primary" onClick={() => setForm({ employee: null })}>Novo funcionário</button>}
       />
       {(error || saveError) && <Banner tone="error">{error || saveError}</Banner>}
       {counts.noSchedule.length > 0 && activeSchedules.length > 0 && (
@@ -137,6 +145,7 @@ export function Employees() {
             <table>
               <thead>
                 <tr>
+                  <th />
                   <th>Nome</th>
                   <th>CPF</th>
                   <th>Obras</th>
@@ -145,14 +154,18 @@ export function Employees() {
                   <th>Senha de ponto</th>
                   <th>Última marcação</th>
                   <th>Situação</th>
+                  <th />
                 </tr>
               </thead>
               <tbody>
                 {list.map((e) => (
                   <tr key={e.cpf}>
+                    <td className="photo-cell"><Avatar name={e.name} url={e.photo_path ? photos[e.photo_path] : undefined} /></td>
                     <td>
-                      <div className="strong">{e.name}</div>
-                      {e.email && <div className="muted small">{e.email}</div>}
+                      <button className="link strong name-link" onClick={() => setForm({ employee: e })}>{e.name}</button>
+                      <div className="muted small">
+                        {[e.job_title, e.contract_type ? CONTRACT_LABEL[e.contract_type] : ""].filter(Boolean).join(" · ") || e.email}
+                      </div>
                       {(e.portal_role || e.tablet_responsible) && (
                         <div className="chips tight">
                           {e.portal_role === "admin" && <Badge tone="ok">Administrador</Badge>}
@@ -202,6 +215,7 @@ export function Employees() {
                     <td>{e.has_pin ? <Badge tone="ok">Cadastrada</Badge> : <Badge tone="warn">Sem senha</Badge>}</td>
                     <td className="nowrap">{e.last_punch_at ? formatDateTime(e.last_punch_at) : <span className="muted">Nenhuma</span>}</td>
                     <td>{e.active ? <Badge tone="ok">Ativo</Badge> : <Badge tone="neutral">Desligado</Badge>}</td>
+                    <td className="right"><button className="ghost small" onClick={() => setForm({ employee: e })}>Editar</button></td>
                   </tr>
                 ))}
               </tbody>
@@ -209,6 +223,10 @@ export function Employees() {
           </div>
         )}
       </section>
+      {form && (
+        <EmployeeForm me={me} employee={form.employee} sites={siteList ?? []} onClose={() => setForm(null)}
+          onSaved={() => { setForm(null); reload(); }} />
+      )}
     </>
   );
 }

@@ -401,7 +401,7 @@ function Portal({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void 
           {current === "monthly" && <Monthly />}
           {current === "opening" && <Opening />}
           {current === "audit" && <Audit />}
-          {current === "employees" && <Employees />}
+          {current === "employees" && <Employees me={me} />}
           {current === "schedules" && <Schedules me={me} />}
           {current === "holidays" && <Holidays />}
           {current === "sites" && <Sites me={me} />}
