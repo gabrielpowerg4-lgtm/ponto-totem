@@ -248,7 +248,8 @@ const GROUPS: Group[] = [
 const ALL_PAGES: Page[] = ["home", "account", ...GROUPS.flatMap((g) => g.items.map((i) => i.page))];
 
 function pageFromHash(): Page {
-  const h = window.location.hash.replace("#", "").split("?")[0] as Page;
+  const raw = window.location.hash.replace("#", "").split("?")[0];
+  const h = (raw === "report" ? "closing" : raw) as Page; // link antigo da Apuracao do periodo
   return ALL_PAGES.includes(h) ? h : "home";
 }
 
@@ -328,8 +329,7 @@ function Portal({ theme, toggleTheme }: { theme: Theme; toggleTheme: () => void 
     ...g, items: g.items.filter((i) => !i.admin || admin),
   }));
   const allowed = ["home", "account", ...groups.flatMap((g) => g.items.filter((i) => !i.soon).map((i) => i.page))];
-  const wanted = (page as string) === "report" ? "closing" : page; // link antigo da Apuracao do periodo
-  const current: Page = allowed.includes(wanted) ? wanted : "home";
+  const current: Page = allowed.includes(page) ? page : "home";
   const currentGroup = groups.find((g) => g.items.some((i) => i.page === current))?.id;
   // Aberto por padrao: o grupo da pagina atual; os demais conforme o usuario deixou.
   function isOpen(id: string) {
