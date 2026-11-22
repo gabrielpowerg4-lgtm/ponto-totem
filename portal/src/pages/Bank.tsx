@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { br, download, errorText, formatCpf, rpc, todayIso, type Employee, type Me } from "../api";
 import { fmtMin } from "../jornada";
-import { askText, Badge, Banner, Empty, Loading, PageHead, useLoad } from "../ui";
+import { askConfirm, askText, Badge, Banner, Empty, Loading, PageHead, useLoad } from "../ui";
 import { hashParams, Hours } from "./Treatment";
 
 // Banco de horas por lotes: cada dia fechado gera um lote com data, vencimento e percentual.
@@ -537,7 +537,7 @@ export function Opening() {
   const bad = items.filter((x) => x.error);
 
   const send = async () => {
-    if (!window.confirm(`Gravar ${items.length} lote(s) de abertura? Lotes de abertura não podem ser alterados depois.`)) return;
+    if (!await askConfirm(`Gravar ${items.length} lote(s) de abertura? Lotes de abertura não podem ser alterados depois.`)) return;
     setBusy(true);
     setMsg(null);
     try {

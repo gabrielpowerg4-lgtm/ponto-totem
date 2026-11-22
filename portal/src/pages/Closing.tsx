@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { br, closeEmployee, closePeriod, download, errorText, formatCpf, rpc, todayIso, type Me } from "../api";
 import { ALERTS, computeAll, FLAG_LABEL, fmtMin, type Sheet, type TimesheetData } from "../jornada";
-import { askText, Badge, Banner, Empty, Loading, PageHead } from "../ui";
+import { askConfirm, askText, Badge, Banner, Empty, Loading, PageHead } from "../ui";
 import { Hours, PeriodSelect, usePeriods } from "./Treatment";
 
 type Mode = "pending" | "close" | "report";
@@ -68,7 +68,7 @@ export default function Closing({ mode, me, openTreatment }: {
   const closeOne = async (s: Sheet) => {
     if (!period) return;
     const warn = s.totals.pending_days > 0 ? `${s.name} ainda tem ${s.totals.pending_days} dia(s) com alerta. ` : "";
-    if (!window.confirm(`${warn}Fechar o período de ${s.name}? Os dias dele ficam travados.`)) return;
+    if (!await askConfirm(`${warn}Fechar o período de ${s.name}? Os dias dele ficam travados.`)) return;
     setRowBusy(s.cpf);
     setMsg(null);
     try {
@@ -131,7 +131,7 @@ export default function Closing({ mode, me, openTreatment }: {
       ? `Ainda há ${summary.pendingDays} dia(s) com alerta em ${summary.pendingEmployees} funcionário(s). `
       : "";
     const already = closures.length ? ` ${closures.length} funcionário(s) já fechado(s) individualmente continuam como estão.` : "";
-    if (!window.confirm(`${warn}Fechar o período de ${br(period.start)} a ${br(period.end)} para todos os funcionários?${already} Depois de fechado, nada pode ser tratado nele.`)) {
+    if (!await askConfirm(`${warn}Fechar o período de ${br(period.start)} a ${br(period.end)} para todos os funcionários?${already} Depois de fechado, nada pode ser tratado nele.`)) {
       return;
     }
     setBusy(true);

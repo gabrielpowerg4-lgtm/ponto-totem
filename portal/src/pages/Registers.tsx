@@ -3,7 +3,7 @@ import {
   br, errorText, formatCpf, formatDateTime, rpc, todayIso, type Employee, type Me, type ScheduleRow, type Site,
   type Terminal,
 } from "../api";
-import { Badge, Banner, Empty, Loading, PageHead, useLoad } from "../ui";
+import { askConfirm, Badge, Banner, Empty, Loading, PageHead, useLoad } from "../ui";
 import EmployeeForm, { Avatar, CONTRACT_LABEL, photoUrl } from "./EmployeeForm";
 
 // ---------------------------------------------------------------------------
@@ -50,7 +50,7 @@ export function Employees({ me }: { me: Me }) {
 
   const applyBulk = async (targets: Employee[]) => {
     if (!bulk || !bulk.schedule) return;
-    if (!window.confirm(`Definir esta jornada para ${targets.length} funcionário(s) sem jornada, a partir de ${br(bulk.from)}?`)) return;
+    if (!await askConfirm(`Definir esta jornada para ${targets.length} funcionário(s) sem jornada, a partir de ${br(bulk.from)}?`)) return;
     setSaveError("");
     try {
       for (const e of targets) {
@@ -353,7 +353,7 @@ export function Terminals({ me }: { me: Me }) {
   const admin = me.role === "admin";
 
   const deactivate = async (t: Terminal) => {
-    const ok = window.confirm(
+    const ok = await askConfirm(
       `Desativar o tablet ${t.code}? Ele deixa de registrar e enviar marcações. ` +
         "Marcações que ainda estiverem só no tablet não serão recebidas. Para voltar a usar, " +
         "será preciso vinculá-lo de novo com a chave da empresa.",

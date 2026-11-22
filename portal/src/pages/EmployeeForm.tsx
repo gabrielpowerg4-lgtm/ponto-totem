@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { errorText, formatCpf, rpc, supabase, type Employee, type Me, type Site } from "../api";
-import { Banner } from "../ui";
+import { askConfirm, Banner } from "../ui";
 
 // Cadastro do funcionario no portal: dados pessoais, contrato, obras e perfis.
 // Inclusao, troca de nome e desligamento geram o registro tipo 5 do AFD, com o seu CPF como responsavel.
@@ -109,7 +109,7 @@ export default function EmployeeForm({ me, employee, sites, onClose, onSaved }: 
     e.preventDefault();
     if (form.new && !cpfValid(cpfDigits)) return setMsg("CPF inválido: confira os números.");
     if (!form.active && !form.dismissed_on) {
-      if (!window.confirm("Desligar sem data de desligamento? Informe a data para que os dias seguintes não contem no ponto.")) return;
+      if (!await askConfirm("Desligar sem data de desligamento? Informe a data para que os dias seguintes não contem no ponto.")) return;
     }
     setBusy(true);
     setMsg("");

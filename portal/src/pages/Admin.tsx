@@ -3,7 +3,7 @@ import {
   br, createPortalUser, errorText, formatCpf, formatDateTime, formatEmployerId, rpc, supabase, todayIso, WEEKDAY_FULL,
   type Company, type Employee, type Me, type PortalUser, type Role,
 } from "../api";
-import { Badge, Banner, Empty, Loading, PageHead, useLoad } from "../ui";
+import { askConfirm, Badge, Banner, Empty, Loading, PageHead, useLoad } from "../ui";
 import { Avatar, CONTRACT_LABEL, photoUrl } from "./EmployeeForm";
 
 const onlyDigits = (v: string, max: number) => v.replace(/\D/g, "").slice(0, max);
@@ -32,7 +32,7 @@ export function CompanyPage({ me, goAccount }: { me: Me; goAccount: () => void }
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
     if (changedIdentity && data.employer_id &&
-        !window.confirm("A alteração dos dados do empregador fica registrada no AFD. Confirmar?")) {
+        !await askConfirm("A alteração dos dados do empregador fica registrada no AFD. Confirmar?")) {
       return;
     }
     setBusy(true);
@@ -177,7 +177,7 @@ function Rules({ company, admin, onSaved }: { company: Company; admin: boolean; 
       const text = form.clt_from
         ? `Os dias a partir de ${br(form.clt_from)} passam a ser calculados pelas regras da CLT (hora noturna reduzida e tolerância por marcação). Confirmar?`
         : "Voltar a calcular pelas regras do SGI? Só é possível se nenhum período com as regras da CLT foi fechado.";
-      if (!window.confirm(text)) return;
+      if (!await askConfirm(text)) return;
     }
     setBusy(true);
     setMsg(null);
@@ -344,7 +344,7 @@ export function Users() {
   };
 
   const remove = async (u: PortalUser) => {
-    if (!window.confirm(`Remover o acesso de ${u.email} ao portal?`)) return;
+    if (!await askConfirm(`Remover o acesso de ${u.email} ao portal?`)) return;
     setMsg(null);
     try {
       setData(await rpc<PortalUser[]>("portal_user_remove", { p_user: u.user_id }));

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { API_BASE, SUPABASE_URL, firstAccess, formatDateTime, rpc, setTimezone, signupAdmin, supabase, type Me, type Summary } from "./api";
-import { PageHead, Stat } from "./ui";
+import { askConfirm, PageHead, Stat } from "./ui";
 import { photoUrl } from "./pages/EmployeeForm";
 import Punches from "./pages/Punches";
 import { Employees, Sites, Terminals } from "./pages/Registers";
@@ -506,7 +506,7 @@ function Integration({ me, onChanged }: { me: Me; onChanged: () => void }) {
 
   const generate = async () => {
     const replacing = me.has_integration_key;
-    if (replacing && !window.confirm("A chave atual deixará de funcionar no Bubble e no n8n. Gerar uma nova chave?")) {
+    if (replacing && !await askConfirm("A chave atual deixará de funcionar no Bubble e no n8n. Gerar uma nova chave?")) {
       return;
     }
     setBusy(true);

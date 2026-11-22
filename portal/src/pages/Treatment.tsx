@@ -7,7 +7,7 @@ import {
   ALERTS, computeEmployee, FLAG_LABEL, fmtClock, fmtMin, OCCURRENCE_LABEL, type Day, type DayMark,
   type TimesheetData,
 } from "../jornada";
-import { askText, Badge, Banner, Empty, Loading, PageHead } from "../ui";
+import { askConfirm, askText, Badge, Banner, Empty, Loading, PageHead } from "../ui";
 
 // ---------------------------------------------------------------------------
 // Periodos (compartilhado com a tela de fechamento)
@@ -174,7 +174,7 @@ export default function Treatment({ me, goAccount }: { me: Me; goAccount: () => 
   const closeOne = async () => {
     if (!period || !sheet) return;
     const warn = sheet.totals.pending_days > 0 ? `Ainda há ${sheet.totals.pending_days} dia(s) com alerta. ` : "";
-    if (!window.confirm(`${warn}Fechar o período de ${br(period.start)} a ${br(period.end)} de ${sheet.name}? Os dias dele ficam travados e o saldo vai para o banco de horas.`)) return;
+    if (!await askConfirm(`${warn}Fechar o período de ${br(period.start)} a ${br(period.end)} de ${sheet.name}? Os dias dele ficam travados e o saldo vai para o banco de horas.`)) return;
     setClosing(true);
     setCloseMsg(null);
     try {

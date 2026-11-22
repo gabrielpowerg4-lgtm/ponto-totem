@@ -100,3 +100,36 @@ export function askText(message: string, opts: AskOptions = {}): Promise<string 
     root.render(<AskDialog message={message} opts={opts} done={done} />);
   });
 }
+
+function ConfirmDialog({ message, title, confirmLabel, done }: {
+  message: string; title: string; confirmLabel: string; done: (v: boolean) => void;
+}) {
+  return (
+    <div className="ask-scrim" onClick={() => done(false)}>
+      <form className="ask-box" onClick={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); done(true); }}
+        onKeyDown={(e) => { if (e.key === "Escape") done(false); }}>
+        <h2>{title}</h2>
+        <p>{message}</p>
+        <div className="ask-actions">
+          <button type="button" className="ghost" onClick={() => done(false)}>Cancelar</button>
+          <button type="submit" className="primary" autoFocus>{confirmLabel}</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+/** Confirmacao dentro do portal (o navegador do app desktop nao mostra window.confirm). */
+export function askConfirm(message: string, opts: { title?: string; confirmLabel?: string } = {}): Promise<boolean> {
+  return new Promise((resolve) => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    const done = (v: boolean) => {
+      root.unmount();
+      host.remove();
+      resolve(v);
+    };
+    root.render(<ConfirmDialog message={message} title={opts.title ?? "Confirmar"} confirmLabel={opts.confirmLabel ?? "Confirmar"} done={done} />);
+  });
+}
